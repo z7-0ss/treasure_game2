@@ -30,7 +30,6 @@ t = t.replace("<title>build_web</title>", "<title>解密·四界征战</title>")
 # 运行时改成本地文件（离线包）
 t = t.replace("https://pygame-web.github.io/cdn/0.9.3/", "./runtime/")
 t = t.replace("./runtime//", "./runtime/")
-t = t.replace('type=module id="site"', 'type="text/javascript" id="site"')
 # 自动开始，不等点击
 t = t.replace("    ume_block : 1,", "    ume_block : 0,")
 # 把运行时里所有对 CDN 的请求重定向到本地
