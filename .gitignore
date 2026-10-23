@@ -1,0 +1,17 @@
+.DS_Store
+.idea/
+.venv_web/
+.buildtools/
+__pycache__/
+*.pyc
+
+build_web/
+dist/
+android/app/build/
+
+audio_log.txt
+savegame.json
+prefs.json
+
+*.apk
+*_web.zip

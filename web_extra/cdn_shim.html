@@ -1,0 +1,51 @@
+<script>
+/* cdn_shim: 离线包，把 pygame-web CDN 的请求重定向到本地 runtime/ */
+(function () {
+  var CDN = "https://pygame-web.github.io/cdn/";
+  var LOCAL = "./runtime/";
+  function map(u) {
+    try { if (typeof u === "string" && u.indexOf(CDN) === 0) return LOCAL + u.slice(CDN.length); } catch (e) {}
+    return u;
+  }
+  var of = window.fetch;
+  if (of) window.fetch = function (input, init) {
+    if (typeof input === "string") input = map(input);
+    else if (input && input.url) { var m = map(input.url); if (m !== input.url) input = new Request(m, input); }
+    return of.call(window, input, init);
+  };
+  var oo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    var a = Array.prototype.slice.call(arguments);
+    a[1] = map(url);
+    return oo.apply(this, a);
+  };
+})();
+
+  window.__bootDone = false;
+  window.addEventListener("load", function () {
+    setTimeout(function () {
+      try {
+        if (window.__bootDone) return;
+        var box = document.getElementById("infobox");
+        if (!box) return;
+        box.style.background = "#402020";
+        box.style.color = "#ffd9d9";
+        box.innerText = "启动超时\\n请先更新 Android System WebView 或 Chrome\\n老旧安卓系统可能不支持当前运行时";
+        box.style.whiteSpace = "pre-line";
+      } catch (e) {}
+    }, 15000);
+  });
+
+  window.onerror = function (msg, src, line, col) {
+    try {
+      var d = document.getElementById("boot_error");
+      if (!d) {
+        d = document.createElement("div");
+        d.id = "boot_error";
+        d.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#300;color:#ffb4b4;font:13px/1.5 monospace;padding:10px;white-space:pre-wrap";
+        document.body.appendChild(d);
+      }
+      d.textContent = "启动出错：" + msg + "\n" + src + ":" + line;
+    } catch (e) {}
+  };
+</script>
