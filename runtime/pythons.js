@@ -670,6 +670,38 @@ console.warn("TODO: user defined canvas")
 
 */
 
+    function viewport_size(sticky) {
+        const vv = window.visualViewport
+        let width = Math.round((vv && vv.width) || window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0)
+        let height = Math.round((vv && vv.height) || window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0)
+
+        if (!nuadm || !sticky) {
+            return { width, height }
+        }
+
+        const mode = width >= height ? "landscape" : "portrait"
+        if (!window.__stableViewport || window.__stableViewport.mode !== mode) {
+            window.__stableViewport = { mode, width, height }
+        } else {
+            window.__stableViewport.width = Math.max(window.__stableViewport.width, width)
+            window.__stableViewport.height = Math.max(window.__stableViewport.height, height)
+            width = window.__stableViewport.width
+            height = window.__stableViewport.height
+        }
+        return { width, height }
+    }
+
+    function preferred_gui_divider(divider) {
+        if (nuadm) {
+            return 1
+        }
+        return divider || vm.config.gui_divider || 1
+    }
+
+    window.addEventListener("orientationchange", () => {
+        window.__stableViewport = null
+    })
+
     // window resize
     function window_canvas_adjust(divider) {
         const canvas = vm.canvas2d
@@ -679,8 +711,9 @@ console.warn("TODO: user defined canvas")
         const ar = canvas.width / canvas.height
 
         // default is maximize
-        var max_width = window.innerWidth
-        var max_height = window.innerHeight
+        const viewport = viewport_size(true)
+        var max_width = viewport.width
+        var max_height = viewport.height
 
 
         if (vm.config.debug) {
@@ -697,10 +730,10 @@ console.warn("TODO: user defined canvas")
         if (window.devicePixelRatio != 1 )
             console.warn("Unsupported device pixel ratio", window.devicePixelRatio)
 
-        if (vm.config.debug) {
+        if (vm.config.debug && !nuadm) {
             divider = vm.config.gui_debug
         } else {
-            divider = vm.config.gui_divider || 1
+            divider = preferred_gui_divider(divider)
         }
 
 
@@ -737,7 +770,7 @@ console.warn("TODO: user defined canvas")
                 return
 
             // center canvas
-            canvas.style.position = "absolute"
+            canvas.style.position = "fixed"
             canvas.style.left = 0
             canvas.style.bottom = 0
             canvas.style.top = 0
@@ -776,8 +809,9 @@ console.warn("TODO: user defined canvas")
 
         // default is maximize
         // default is maximize
-        var max_width = window.document.body.clientWidth
-        var max_height = window.document.body.clientHeight
+        const viewport = viewport_size(true)
+        var max_width = viewport.width
+        var max_height = viewport.height
         want_w = max_width
         want_h = max_height
 
@@ -806,7 +840,7 @@ console.warn("TODO: user defined canvas")
         canvas.width  = vm.config.fb_width
         canvas.height = vm.config.fb_height
 
-        canvas.style.position = "absolute"
+        canvas.style.position = "fixed"
         canvas.style.top = 0
         canvas.style.right = 0
 
@@ -832,7 +866,7 @@ console.warn("TODO: user defined canvas")
     function window_resize() {
         // TODO: need special management for 3D ctx
         if (vm.config.user_canvas_managed==3) {
-            setTimeout(window_canvas_adjust_3d, 100, vm.config.gui_divider);
+            setTimeout(window_canvas_adjust_3d, 100, preferred_gui_divider(vm.config.gui_divider));
         } else {
             // don't interfere if program want to handle canvas placing/resizing
             if (vm.config.user_canvas_managed)
@@ -842,7 +876,7 @@ console.warn("TODO: user defined canvas")
                 console.warn("777: No canvas defined")
                 return
             }
-            setTimeout(window_canvas_adjust, 100, vm.config.gui_divider);
+            setTimeout(window_canvas_adjust, 100, preferred_gui_divider(vm.config.gui_divider));
 
         }
         setTimeout(window.focus, 100);
@@ -851,6 +885,10 @@ console.warn("TODO: user defined canvas")
 
     vm.canvas = canvas2d || canvas3d
     window.addEventListener('resize', window_resize);
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', window_resize);
+        window.visualViewport.addEventListener('scroll', window_resize);
+    }
     return vm.canvas
 }
 

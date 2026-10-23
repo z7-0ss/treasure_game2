@@ -69,6 +69,7 @@ t = t.replace(
     platform.window.__bootDone = true
     platform.window.config.gui_divider = 1
 """)
+t = t.replace("    gui_divider : 2,", "    gui_divider : 1,")
 t = t.replace(
 """        body {
             font-family: arial;
