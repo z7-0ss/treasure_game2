@@ -22,6 +22,10 @@ def _light(color, amount=0.35):
     return tuple(min(255, int(c + (255 - c) * amount)) for c in color[:3])
 
 
+def _blend(color_a, color_b, t):
+    return tuple(int(color_a[i] + (color_b[i] - color_a[i]) * t) for i in range(3))
+
+
 def _check_grid(name, grid):
     width = len(grid[0])
     for row in grid:
@@ -230,14 +234,16 @@ BUTTERFLY_CLOSE = (
 
 PET = (
     "............",
-    "..o......o..",
-    ".o#o.oo.o#o.",
-    ".o#o###o#o..",
-    "..oo####oo..",
+    "....oo......",
+    "...o##o.....",
+    "..o#++#oo...",
+    ".o#++++##o..",
+    ".o#+e##e#o..",
+    "..o##pp##o..",
     "...o####o...",
-    "...o#e#e#o..",
-    "....#pp#....",
-    "....oooo....",
+    "..oo#oo#oo..",
+    ".o###o..o#o.",
+    "..ooo....oo.",
     "............",
 )
 
@@ -332,6 +338,9 @@ def monster_sprite(enemy_type, elite=False, frame=0, flip=False):
 
 
 _WEAPON_CACHE = {}
+_WEAPON_ROT_CACHE = {}
+_WING_CACHE = {}
+_BOSS_CACHE = {}
 
 
 def boss_weapon_surface(kind, color=(210, 214, 226), scale=3):
@@ -370,11 +379,16 @@ def boss_weapon_surface(kind, color=(210, 214, 226), scale=3):
 
 
 def draw_boss_weapon(screen, x, y, kind, facing_right=False, swing=0.0, color=(214, 218, 230)):
-    surf = boss_weapon_surface(kind, color)
-    angle = -28 + swing * 26
+    step = max(0, min(12, int(round(swing * 12))))
+    angle = -28 + step * (26 / 12)
     if not facing_right:
-        angle = 28 - swing * 26
-    rot = pygame.transform.rotate(surf, angle)
+        angle = 28 - step * (26 / 12)
+    key = (kind, color, facing_right, step)
+    rot = _WEAPON_ROT_CACHE.get(key)
+    if rot is None:
+        surf = boss_weapon_surface(kind, color)
+        rot = pygame.transform.rotate(surf, angle)
+        _WEAPON_ROT_CACHE[key] = rot
     screen.blit(rot, (int(x - rot.get_width() // 2), int(y - rot.get_height() // 2)))
 
 
@@ -384,19 +398,85 @@ def draw_wings(screen, x, y, color=(220, 230, 255), flap=0.0):
     for side in (-1, 1):
         w = int(52 * spread)
         h = 34
-        pts = [(x, y),
-               (x + side * w, y - h * 0.55),
-               (x + side * (w + 14), y - h * 0.1),
-               (x + side * w * 0.8, y + h * 0.4)]
-        surf = pygame.Surface((abs(side * (w + 16)) + 8, h * 2 + 8), pygame.SRCALPHA)
-        ox = 4 if side > 0 else abs(side * (w + 16)) + 4
-        local = [(ox + (px - x), py - y + h + 4) for px, py in pts]
-        pygame.draw.polygon(surf, (*color, 150), local)
-        pygame.draw.polygon(surf, (*_shade(color, 0.7), 220), local, 2)
+        key = (side, color, w, h)
+        cached = _WING_CACHE.get(key)
+        if cached is None:
+            pts = [(0, 0),
+                   (side * w, -h * 0.55),
+                   (side * (w + 14), -h * 0.1),
+                   (side * w * 0.8, h * 0.4)]
+            surf = pygame.Surface((abs(side * (w + 16)) + 8, h * 2 + 8), pygame.SRCALPHA)
+            ox = 4 if side > 0 else abs(side * (w + 16)) + 4
+            local = [(ox + px, py + h + 4) for px, py in pts]
+            pygame.draw.polygon(surf, (*color, 150), local)
+            pygame.draw.polygon(surf, (*_shade(color, 0.7), 220), local, 2)
+            cached = (surf, ox)
+            _WING_CACHE[key] = cached
+        surf, ox = cached
         screen.blit(surf, (x - ox, y - h - 4))
 
 
+def _boss_decor(surface, enemy_type, chapter, variant):
+    w, h = surface.get_width(), surface.get_height()
+    cx = w // 2
+    outline = (28, 16, 36)
+    chapter_cols = {
+        0: ((118, 210, 138), (214, 255, 196)),
+        1: ((92, 196, 238), (210, 246, 255)),
+        2: ((198, 210, 252), (255, 252, 232)),
+        3: ((255, 142, 94), (255, 228, 142)),
+    }
+    trim, glow = chapter_cols.get(chapter, ((200, 180, 230), (255, 236, 186)))
+    rage = (230, 92, 88)
+    ancient = (168, 128, 240)
+    abyss = (78, 58, 118)
+    if enemy_type == "slime":
+        pygame.draw.arc(surface, outline, (cx - 28, 12, 56, 24), math.pi, math.tau, 3)
+        pygame.draw.arc(surface, trim, (cx - 26, 10, 52, 20), math.pi, math.tau, 2)
+        pygame.draw.circle(surface, glow, (cx, h // 2 - 6), 7, 2)
+    elif enemy_type == "mushroom":
+        pygame.draw.arc(surface, outline, (cx - 34, 8, 68, 28), math.pi, math.tau, 4)
+        pygame.draw.arc(surface, trim, (cx - 32, 10, 64, 22), math.pi, math.tau, 2)
+        for dx in (-16, 0, 16):
+            pygame.draw.circle(surface, glow, (cx + dx, 22), 4)
+    elif enemy_type == "skeleton":
+        pygame.draw.polygon(surface, outline, [(cx - 26, 22), (cx - 10, 8), (cx + 10, 8), (cx + 26, 22)], 0)
+        pygame.draw.polygon(surface, trim, [(cx - 22, 22), (cx - 8, 11), (cx + 8, 11), (cx + 22, 22)], 0)
+        pygame.draw.rect(surface, glow, (cx - 10, 26, 20, 4))
+    elif enemy_type == "golem":
+        pygame.draw.rect(surface, outline, (cx - 30, 14, 60, 12), border_radius=3)
+        pygame.draw.rect(surface, trim, (cx - 26, 16, 52, 8), border_radius=2)
+        pygame.draw.circle(surface, glow, (cx, h // 2 - 4), 6)
+        pygame.draw.circle(surface, (255, 255, 255), (cx - 2, h // 2 - 6), 2)
+    elif enemy_type == "tree":
+        pygame.draw.line(surface, outline, (cx - 10, 18), (cx - 28, 2), 4)
+        pygame.draw.line(surface, outline, (cx + 10, 18), (cx + 28, 2), 4)
+        pygame.draw.line(surface, trim, (cx - 8, 18), (cx - 26, 4), 2)
+        pygame.draw.line(surface, trim, (cx + 8, 18), (cx + 26, 4), 2)
+        pygame.draw.circle(surface, glow, (cx, h // 2 - 2), 4)
+
+    if variant >= 1:
+        if enemy_type in ("slime", "skeleton", "golem"):
+            pygame.draw.polygon(surface, rage, [(cx - 20, 18), (cx - 8, 4), (cx - 2, 18)])
+            pygame.draw.polygon(surface, rage, [(cx + 20, 18), (cx + 8, 4), (cx + 2, 18)])
+        else:
+            pygame.draw.circle(surface, rage, (cx - 16, 18), 5)
+            pygame.draw.circle(surface, rage, (cx + 16, 18), 5)
+    if variant >= 2:
+        for dx in (-18, 0, 18):
+            pygame.draw.rect(surface, ancient, (cx + dx - 2, h - 30, 4, 12))
+            pygame.draw.rect(surface, glow, (cx + dx - 1, h - 28, 2, 8))
+    if variant >= 3:
+        pygame.draw.arc(surface, abyss, (cx - 34, h - 34, 68, 20), 0, math.pi, 4)
+        pygame.draw.arc(surface, outline, (cx - 34, h - 36, 68, 22), 0, math.pi, 1)
+        pygame.draw.circle(surface, abyss, (cx, h // 2 + 8), 8, 2)
+
+
 def boss_sprite(enemy_type, level_idx, flip=False, variant=0):
+    key = (enemy_type, level_idx, flip, variant)
+    cached = _BOSS_CACHE.get(key)
+    if cached is not None:
+        return cached
     art = MONSTER_ART.get(enemy_type, MONSTER_ART["slime"])
     chapter = chapter_of(level_idx)
     body = {
@@ -411,7 +491,11 @@ def boss_sprite(enemy_type, level_idx, flip=False, variant=0):
     palette = _monster_palette(body, art["outline"], art["accent"], True)
     palette["+"] = _light(body, 0.6)
     palette["o"] = (18, 10, 24)
-    return sprite(f"boss:{enemy_type}:{level_idx}", art["frames"][0], palette, art["scale"] + 4, flip)
+    base = sprite(f"boss:{enemy_type}:{level_idx}", art["frames"][0], palette, art["scale"] + 4, flip)
+    surf = base.copy()
+    _boss_decor(surf, enemy_type, chapter, variant)
+    _BOSS_CACHE[key] = surf
+    return surf
 
 
 PLAYER_BODY = (
@@ -430,39 +514,113 @@ PLAYER_BODY = (
     "...pp..pp...",
     "...ll..ll...",
 )
+PLAYER_BODIES = {
+    WEAPON_SWORD: (
+        "...hhhhhh...",
+        "..hhhhhhhh..",
+        "..hssccssh..",
+        "..hssrrssh..",
+        "...assssa...",
+        "..taaaaatt..",
+        ".ttaaaammtt.",
+        ".ttaaaammtt.",
+        "..taaaaatt..",
+        "...appppa...",
+        "..pppppppp..",
+        "..ppp..ppp..",
+        "...ll..ll...",
+        "...ll..ll...",
+    ),
+    WEAPON_BOW: (
+        "...hhhhhh...",
+        "..hhhhhhhh..",
+        "..hsessesh..",
+        ".hssrrrsssh.",
+        ".mtaaaaattm.",
+        ".mtaaaaattm.",
+        ".mmaaataamm.",
+        "..taaaaatt..",
+        "..taaaaatt..",
+        "...appppa...",
+        "..pppppppp..",
+        "..ppp..ppp..",
+        "..lll..lll..",
+        "...ll..ll...",
+    ),
+    WEAPON_STAFF: (
+        "...hhhhhh...",
+        "..hhhhhhhh..",
+        "...hseseh...",
+        "..mmssrrmm..",
+        "..mmaaaamm..",
+        ".mmmaaaaamm.",
+        ".mttaaaattm.",
+        ".mttaaaattm.",
+        "..mtaaattm..",
+        "..pppppppp..",
+        "..pppppppp..",
+        "..ppp..ppp..",
+        "...ll..ll...",
+        "..lll..lll..",
+    ),
+}
 PLAYER_SCALE = 3
 
+GEAR_STYLE = {
+    "forest": {"trim": (118, 210, 138), "rune": (224, 255, 186), "cloak": (58, 120, 74),
+               "metal": (182, 214, 154), "glow": (132, 230, 150)},
+    "ocean": {"trim": (92, 196, 238), "rune": (210, 246, 255), "cloak": (38, 86, 132),
+              "metal": (186, 234, 255), "glow": (120, 214, 255)},
+    "sky": {"trim": (198, 210, 252), "rune": (255, 252, 232), "cloak": (104, 112, 170),
+            "metal": (240, 242, 255), "glow": (220, 226, 255)},
+    "volcano": {"trim": (255, 142, 94), "rune": (255, 228, 142), "cloak": (124, 54, 36),
+                "metal": (255, 196, 150), "glow": (255, 150, 108)},
+}
 
-def player_sprite(armor, head, pants=(46, 54, 84), boots=(92, 64, 40), skin=SKIN_COLOR):
+
+def gear_style(set_key):
+    return GEAR_STYLE.get(set_key, GEAR_STYLE["forest"])
+
+
+def player_sprite(armor, head, weapon_type=WEAPON_SWORD, set_key="forest",
+                  pants=(46, 54, 84), boots=(92, 64, 40), skin=SKIN_COLOR):
+    body = PLAYER_BODIES.get(weapon_type, PLAYER_BODY)
+    style = gear_style(set_key)
+    mantle = _blend(style["cloak"], armor, 0.3)
+    trim = _blend(style["trim"], armor, 0.45)
+    rune = style["rune"]
     palette = {
         "h": head, "s": skin, "e": (26, 22, 34), "a": armor,
         "b": _shade(skin, 0.92), "p": pants, "l": boots,
+        "t": trim, "r": rune, "m": mantle, "c": _light(trim, 0.28),
     }
-    key = ("player", armor, head, pants, boots, skin)
-    return sprite("player", PLAYER_BODY, palette, PLAYER_SCALE)
+    return sprite(f"player:{weapon_type}:{set_key}", body, palette, PLAYER_SCALE)
 
 
 def draw_player_hat(screen, x, y, weapon_type, color):
     """在头顶画职业头饰（x,y 是小人左上角，宽 36）。"""
     cx = x + 18
     if weapon_type == WEAPON_STAFF:
-        # 尖顶巫师帽
+        # 露出脸部的尖顶巫师帽
         pygame.draw.polygon(screen, _shade(color, 0.75),
-                            [(cx, y - 15), (cx - 13, y + 9), (cx + 13, y + 9)])
-        pygame.draw.polygon(screen, color, [(cx, y - 15), (cx - 10, y + 8), (cx + 11, y + 8)])
-        pygame.draw.polygon(screen, _light(color, 0.3), [(cx - 1, y - 13), (cx - 4, y + 6), (cx + 2, y + 6)])
-        pygame.draw.rect(screen, _shade(color, 0.6), (cx - 16, y + 7, 32, 4))
-        pygame.draw.rect(screen, (255, 230, 140), (cx - 4, y - 6, 8, 3))
+                            [(cx, y - 14), (cx - 11, y + 5), (cx + 11, y + 5)])
+        pygame.draw.polygon(screen, color, [(cx, y - 14), (cx - 8, y + 4), (cx + 9, y + 4)])
+        pygame.draw.polygon(screen, _light(color, 0.3), [(cx - 1, y - 12), (cx - 4, y + 2), (cx + 2, y + 2)])
+        pygame.draw.rect(screen, _shade(color, 0.6), (cx - 14, y + 3, 28, 4))
+        pygame.draw.rect(screen, color, (cx - 11, y + 4, 22, 3))
+        pygame.draw.rect(screen, (255, 230, 140), (cx - 4, y - 5, 8, 3))
     elif weapon_type == WEAPON_BOW:
-        # 兜帽
-        pygame.draw.polygon(screen, _shade(color, 0.7),
-                            [(cx - 13, y + 11), (cx - 10, y - 3), (cx, y - 12),
-                             (cx + 10, y - 3), (cx + 13, y + 11)])
+        # 游侠兜帽 + 羽饰，脸部更清楚
+        pygame.draw.polygon(screen, _shade(color, 0.72),
+                            [(cx - 12, y + 9), (cx - 8, y - 2), (cx, y - 11),
+                             (cx + 10, y - 1), (cx + 12, y + 9)])
         pygame.draw.polygon(screen, color,
-                            [(cx - 11, y + 10), (cx - 8, y - 2), (cx, y - 10),
-                             (cx + 8, y - 2), (cx + 11, y + 10)])
-        pygame.draw.polygon(screen, _shade(color, 0.55),
-                            [(cx - 11, y + 10), (cx - 8, y - 2), (cx - 3, y - 8), (cx - 3, y + 10)])
+                            [(cx - 10, y + 8), (cx - 6, y), (cx, y - 8),
+                             (cx + 8, y), (cx + 10, y + 8)])
+        pygame.draw.rect(screen, _shade(color, 0.58), (cx - 11, y + 8, 22, 3))
+        pygame.draw.line(screen, _light(color, 0.35), (cx + 3, y - 5), (cx + 8, y + 4), 2)
+        pygame.draw.line(screen, (188, 245, 210), (cx + 8, y - 9), (cx + 12, y - 1), 2)
+        pygame.draw.line(screen, (236, 255, 210), (cx + 10, y - 8), (cx + 14, y - 2), 1)
     else:
         # 战士：盔缨
         pygame.draw.rect(screen, _shade(color, 0.7), (cx - 12, y - 2, 24, 8))
@@ -585,6 +743,30 @@ def _bracelet_icon(screen, x, y, col):
     pygame.draw.circle(screen, (255, 255, 255), (x + 17, y + 7), 2)
 
 
+def _gear_series_overlay(screen, x, y, set_key, color, kind, weapon_type=None):
+    if set_key == "forest":
+        pygame.draw.line(screen, _shade(color, 0.7), (x + 6, y + 30), (x + 12, y + 10), 2)
+        pygame.draw.polygon(screen, _light(color, 0.35), [(x + 12, y + 10), (x + 16, y + 6), (x + 18, y + 12)])
+        pygame.draw.polygon(screen, color, [(x + 8, y + 20), (x + 4, y + 16), (x + 10, y + 14)])
+    elif set_key == "ocean":
+        pygame.draw.arc(screen, _light(color, 0.35), (x + 4, y + 10, 20, 12), 0.2, 2.9, 2)
+        pygame.draw.circle(screen, (235, 250, 255), (x + 25, y + 9), 2)
+        pygame.draw.circle(screen, color, (x + 28, y + 14), 3, 1)
+    elif set_key == "sky":
+        pygame.draw.line(screen, _light(color, 0.4), (x + 8, y + 24), (x + 18, y + 12), 2)
+        pygame.draw.line(screen, _light(color, 0.4), (x + 18, y + 12), (x + 28, y + 24), 2)
+        pygame.draw.circle(screen, (255, 244, 214), (x + 18, y + 11), 2)
+    elif set_key == "volcano":
+        pygame.draw.line(screen, _shade(color, 0.78), (x + 7, y + 29), (x + 15, y + 18), 2)
+        pygame.draw.line(screen, _shade(color, 0.78), (x + 15, y + 18), (x + 24, y + 29), 2)
+        pygame.draw.circle(screen, (255, 214, 150), (x + 18, y + 10), 2)
+        pygame.draw.circle(screen, color, (x + 22, y + 7), 2)
+    if kind == "weapon" and weapon_type == WEAPON_STAFF:
+        pygame.draw.circle(screen, (255, 255, 255), (x + 18, y + 6), 1)
+    elif kind == "bracelet":
+        pygame.draw.circle(screen, (255, 255, 255), (x + 18, y + 19), 1)
+
+
 def _key_icon(screen, x, y, t):
     gold, dark = (255, 214, 64), (156, 108, 12)
     bob = int(math.sin(t * 4) * 1)
@@ -634,9 +816,14 @@ def _bomb_icon(screen, x, y, t):
     pygame.draw.circle(screen, (255, 250, 220), (x + 27, y + 1), 1)
 
 
-def draw_item_icon(screen, x, y, kind, quality, weapon_type, t, set_color=None):
+def draw_item_icon(screen, x, y, kind, quality, weapon_type, t, set_color=None, set_key=None):
     """在 (x, y) 处画 36x36 的掉落物图标。"""
     color = Q_COLOR.get(quality, (235, 235, 235))
+    if set_key and not set_color:
+        set_color = GEAR_SETS.get(set_key, GEAR_SETS["forest"]).get("color")
+    gear_kind = kind in ("weapon", "armor", "boots", "pants", "bracelet", "helmet")
+    if gear_kind and set_color:
+        color = _blend(color, set_color, 0.68 if quality == Q_WHITE else 0.35)
     if kind == "weapon":
         if quality != Q_WHITE:
             blit_glow(screen, x + 18, y + 18, 24, color, 60)
@@ -682,6 +869,9 @@ def draw_item_icon(screen, x, y, kind, quality, weapon_type, t, set_color=None):
         _key_icon(screen, x, y, t)
     elif kind == "chest":
         _chest_icon(screen, x, y, t)
+
+    if gear_kind and set_key:
+        _gear_series_overlay(screen, x, y, set_key, set_color or color, kind, weapon_type)
 
     # 套装标记：右上角一颗小宝石
     if set_color and kind in ("weapon", "armor", "helmet", "boots", "pants", "bracelet"):
@@ -732,6 +922,12 @@ def paint_floor(surf, x, y, r, c, level_idx):
     base, alt = THEME_COLORS[theme]["floor"]
     n = _noise(r, c, level_idx)
     surf.fill(base, (x, y, TILE_SIZE, TILE_SIZE))
+    surf.fill(_light(base, 0.08), (x, y, TILE_SIZE, 4))
+    surf.fill(_shade(base, 0.84), (x, y + TILE_SIZE - 5, TILE_SIZE, 5))
+    surf.fill(_shade(base, 0.9), (x, y, 3, TILE_SIZE))
+    surf.fill(_shade(base, 0.94), (x + TILE_SIZE - 2, y, 2, TILE_SIZE))
+    center = pygame.Rect(x + 6, y + 6, TILE_SIZE - 12, TILE_SIZE - 12)
+    pygame.draw.rect(surf, _light(base, 0.04), center, 1)
 
     if grass:
         # 不规则色斑（画成小块而不是整格，避免出现棋盘格子感）
@@ -740,6 +936,9 @@ def paint_floor(surf, x, y, r, c, level_idx):
             py = y + int(_noise(r, c, i, 41) * (TILE_SIZE - 10))
             shade = alt if i % 2 == 0 else _shade(base, 0.94)
             surf.fill(shade, (px, py, 12, 8))
+        if n > 0.48:
+            pygame.draw.line(surf, (62, 124, 70), (x + 8, y + 29), (x + 16, y + 15), 1)
+            pygame.draw.line(surf, (86, 156, 92), (x + 18, y + 31), (x + 25, y + 18), 1)
         # 草叶
         for i in range(3):
             gx = x + int(_noise(r, c, i, 11) * (TILE_SIZE - 6)) + 3
@@ -758,12 +957,16 @@ def paint_floor(surf, x, y, r, c, level_idx):
             wx = x + int(_noise(r, c, 71) * 24) + 6
             wy = y + int(_noise(r, c, 72) * 24) + 6
             pygame.draw.arc(surf, (90, 160, 200), (wx, wy, 14, 8), 0.2, 2.9, 1)
+        if n > 0.42:
+            pygame.draw.arc(surf, (74, 136, 182), (x + 5, y + 12, 22, 12), 0.1, 2.6, 1)
+            pygame.draw.arc(surf, (132, 198, 226), (x + 10, y + 22, 16, 8), 0.1, 2.8, 1)
         if n > 0.93:
             bx = x + int(_noise(r, c, 73) * 20) + 8
             by = y + int(_noise(r, c, 74) * 20) + 8
             pygame.draw.circle(surf, (150, 210, 235), (bx, by), 2, 1)
     elif theme == "sky":
         surf.fill(alt if n < 0.35 else base, (x, y, TILE_SIZE, TILE_SIZE))
+        pygame.draw.line(surf, (134, 146, 188), (x + 6, y + 30), (x + 18, y + 14), 1)
         if n > 0.55:
             cx = x + int(_noise(r, c, 81) * 20) + 8
             cy = y + int(_noise(r, c, 82) * 20) + 8
@@ -775,6 +978,8 @@ def paint_floor(surf, x, y, r, c, level_idx):
             pygame.draw.rect(surf, (235, 240, 255), (sx, sy, 2, 2))
     elif theme == "volcano":
         surf.fill(alt if n < 0.35 else base, (x, y, TILE_SIZE, TILE_SIZE))
+        pygame.draw.line(surf, (98, 42, 34), (x + 8, y + 10), (x + 18, y + 22), 1)
+        pygame.draw.line(surf, (158, 72, 46), (x + 17, y + 22), (x + 28, y + 13), 1)
         if n > 0.55:
             lx = x + int(_noise(r, c, 91) * 18) + 8
             ly = y + int(_noise(r, c, 92) * 18) + 8
@@ -877,6 +1082,9 @@ def paint_wall(surf, x, y, r, c, level_idx):
         ry = y + int(_noise(r, c, 6) * 18) + 10
         pygame.draw.rect(surf, _shade(body, 0.62), (rx, ry, 5, 4))
         pygame.draw.rect(surf, _light(body, 0.2), (rx + 4, ry, 3, 2))
+    if n > 0.4:
+        pygame.draw.line(surf, _shade(edge, 0.9), (x + 8, y + 11), (x + 18, y + 20), 1)
+        pygame.draw.line(surf, _light(top, 0.12), (x + 18, y + 20), (x + 28, y + 13), 1)
     if grass and n > 0.7:
         pygame.draw.rect(surf, (96, 150, 80), (x + 6, y + 2, 8, 4))
     elif theme == "ocean" and n > 0.65:

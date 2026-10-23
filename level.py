@@ -247,36 +247,172 @@ def _scatter_rocks(grid, reserved, count, spacing=3, tries=6000):
     return placed
 
 
+def _framed_open_grid():
+    grid = _blank_grid("0")
+    for r in range(MAP_ROWS):
+        grid[r][0] = "1"
+        grid[r][MAP_COLS - 1] = "1"
+    for c in range(MAP_COLS):
+        grid[0][c] = "1"
+        grid[MAP_ROWS - 1][c] = "1"
+    return grid
+
+
+def _fill_rect(grid, top, left, height, width, char="1"):
+    bottom = min(MAP_ROWS - 1, top + height)
+    right = min(MAP_COLS - 1, left + width)
+    for r in range(max(1, top), bottom):
+        for c in range(max(1, left), right):
+            grid[r][c] = char
+
+
+def _clear_rect(grid, top, left, height, width):
+    _fill_rect(grid, top, left, height, width, "0")
+
+
+def _clear_disk(grid, row, col, radius):
+    for r in range(max(1, row - radius), min(MAP_ROWS - 1, row + radius + 1)):
+        for c in range(max(1, col - radius), min(MAP_COLS - 1, col + radius + 1)):
+            if ((r - row) * (r - row) + (c - col) * (c - col)) <= radius * radius + radius:
+                grid[r][c] = "0"
+
+
+def _carve_hall(grid, a, b, width=2):
+    ar, ac = a
+    br, bc = b
+    if random.random() < 0.5:
+        row = ar
+        step = 1 if bc >= ac else -1
+        for c in range(ac, bc + step, step):
+            _clear_rect(grid, row - width // 2, c - width // 2, width + 1, width + 1)
+        col = bc
+        step = 1 if br >= row else -1
+        for r in range(row, br + step, step):
+            _clear_rect(grid, r - width // 2, col - width // 2, width + 1, width + 1)
+    else:
+        col = ac
+        step = 1 if br >= ar else -1
+        for r in range(ar, br + step, step):
+            _clear_rect(grid, r - width // 2, col - width // 2, width + 1, width + 1)
+        row = br
+        step = 1 if bc >= col else -1
+        for c in range(col, bc + step, step):
+            _clear_rect(grid, row - width // 2, c - width // 2, width + 1, width + 1)
+
+
+def _ensure_story_points_clear(grid):
+    for spot in (START_TILE, KEY_TILE, CHEST_TILE, DOOR_TILE):
+        _clear_rect(grid, spot[0] - 1, spot[1] - 1, 4, 4)
+
+
+def _generate_forest_layout(sub):
+    grid = _blank_grid("1")
+    groves = [START_TILE, KEY_TILE, CHEST_TILE, DOOR_TILE]
+    extras = [(6, 16), (9, 40), (18, 18), (20, 46), (24, 30)]
+    random.shuffle(extras)
+    groves.extend(extras)
+    for row, col in groves:
+        _clear_disk(grid, row, col, 2 + (1 if sub >= 2 and random.random() < 0.45 else 0))
+    for a, b in zip(groves, groves[1:]):
+        _carve_hall(grid, a, b, width=2 + (1 if sub >= 1 else 0))
+    for _ in range(3 + sub):
+        a, b = random.sample(groves, 2)
+        _carve_hall(grid, a, b, width=2)
+    for _ in range(8 + sub * 3):
+        _clear_disk(grid, random.randint(4, MAP_ROWS - 5), random.randint(4, MAP_COLS - 5), 1)
+    _ensure_story_points_clear(grid)
+    return grid
+
+
+def _generate_ocean_layout(sub):
+    grid = _framed_open_grid()
+    lane_rows = [5, 13, 21]
+    for row in lane_rows:
+        _clear_rect(grid, row, 1, 4, MAP_COLS - 2)
+    reserved = _reserved_tiles(START_TILE, KEY_TILE, CHEST_TILE, DOOR_TILE)
+    for _ in range(11 + sub * 2):
+        h = random.randint(3, 6)
+        w = random.randint(4, 9)
+        r = random.randint(2, MAP_ROWS - h - 2)
+        c = random.randint(3, MAP_COLS - w - 3)
+        if any((rr, cc) in reserved for rr in range(r - 1, r + h + 1) for cc in range(c - 1, c + w + 1)):
+            continue
+        _fill_rect(grid, r, c, h, w)
+        if h >= 5 and w >= 6 and random.random() < 0.55:
+            _clear_rect(grid, r + 1, c + 1, h - 2, w - 2)
+    for col in range(8, MAP_COLS - 8, 12):
+        gap = random.choice(lane_rows) + random.randint(-1, 1)
+        for r in range(2, MAP_ROWS - 2):
+            if abs(r - gap) <= 2:
+                continue
+            if random.random() < 0.85:
+                grid[r][col] = "1"
+    _ensure_story_points_clear(grid)
+    return grid
+
+
+def _generate_sky_layout(sub):
+    grid = _framed_open_grid()
+    column_step = 8
+    for i, col in enumerate(range(8, MAP_COLS - 6, column_step)):
+        gap = 4 + ((i * 5 + sub * 3) % 16)
+        thickness = 2 if i % 2 == 0 else 1
+        for r in range(2, MAP_ROWS - 2):
+            if gap <= r <= gap + 4:
+                continue
+            for off in range(thickness):
+                if col + off < MAP_COLS - 1:
+                    grid[r][col + off] = "1"
+    for row in (7, 15, 23):
+        for c in range(5, MAP_COLS - 5):
+            if (c // 6 + row + sub) % 3 == 0:
+                _clear_rect(grid, row, c, 2, 3)
+    _ensure_story_points_clear(grid)
+    return grid
+
+
+def _generate_volcano_layout(sub):
+    grid = _framed_open_grid()
+    _fill_rect(grid, 7, 18, 16, 24)
+    _clear_rect(grid, 10, 21, 10, 18)
+    _clear_rect(grid, 13, 18, 4, 3)
+    _clear_rect(grid, 13, 39, 4, 3)
+    _clear_rect(grid, 7, 28, 3, 4)
+    _clear_rect(grid, 20, 28, 3, 4)
+    for col in range(8, MAP_COLS - 8, 10):
+        if 18 <= col <= 40:
+            continue
+        gap = random.choice((5, 13, 22))
+        for r in range(2, MAP_ROWS - 2):
+            if abs(r - gap) <= 1:
+                continue
+            grid[r][col] = "1"
+            if sub >= 2 and col + 1 < MAP_COLS - 1 and random.random() < 0.65:
+                grid[r][col + 1] = "1"
+    for row in (6, 23):
+        for c in range(6, MAP_COLS - 6, 7):
+            _fill_rect(grid, row, c, 2, 2)
+    _ensure_story_points_clear(grid)
+    return grid
+
+
 # 生成一个 60列 x 30行 的超大地图（960x540 屏幕需要滚动）
 def generate_map(level_idx):
     theme = level_theme(level_idx)
     chapter = chapter_of(level_idx)
     sub = level_idx % LEVELS_PER_CHAPTER
-
     if theme == "forest" and sub == 0:
-        # 森林第一章第一关：迷宫
         grid = _blank_grid("1")
         _carve_maze(grid)
+        _ensure_story_points_clear(grid)
+    elif theme == "forest":
+        grid = _generate_forest_layout(sub)
+    elif theme == "ocean":
+        grid = _generate_ocean_layout(sub)
+    elif theme == "sky":
+        grid = _generate_sky_layout(sub)
     else:
-        # 空旷场景：石头随机散布，但彼此至少隔 3 格。
-        # 这样任何缝隙都有 2 格 = 80px，比玩家 32x48 的碰撞盒宽得多，不会卡住。
-        grid = _blank_grid("0")
-        for r in range(MAP_ROWS):
-            grid[r][0] = "1"
-            grid[r][MAP_COLS - 1] = "1"
-        for c in range(MAP_COLS):
-            grid[0][c] = "1"
-            grid[MAP_ROWS - 1][c] = "1"
-
-        reserved = _reserved_tiles(START_TILE, KEY_TILE, CHEST_TILE, DOOR_TILE)
-        density = {
-            "forest": [30, 60, 80, 95],
-            "ocean": [45, 65, 85, 100],
-            "sky": [35, 55, 75, 90],
-            "volcano": [55, 75, 95, 110],
-        }[theme][sub]
-        rock_count = density
-        _scatter_rocks(grid, reserved, rock_count)
+        grid = _generate_volcano_layout(sub)
 
     for (r, c), char in ((START_TILE, "2"), (KEY_TILE, "3"),
                          (CHEST_TILE, "4"), (DOOR_TILE, "5")):
@@ -285,12 +421,33 @@ def generate_map(level_idx):
     # 矮墙：跳起来可以越过，走路过不去
     reserved = _reserved_tiles(START_TILE, KEY_TILE, CHEST_TILE, DOOR_TILE)
     targets = (KEY_TILE, CHEST_TILE, DOOR_TILE)
-    low_count = {0: 20, 1: 26, 2: 32}.get(level_idx, 24)
+    low_count = {
+        "forest": [12, 16, 20, 24],
+        "ocean": [10, 12, 14, 16],
+        "sky": [6, 8, 10, 12],
+        "volcano": [14, 18, 22, 26],
+    }[theme][sub]
     _scatter_special(grid, LOW_WALL_CHAR, low_count, reserved, targets)
-    platform_count = {"forest": 14, "ocean": 18, "sky": 30, "volcano": 16}[theme]
+    platform_count = {
+        "forest": [10, 12, 14, 16],
+        "ocean": [16, 18, 20, 22],
+        "sky": [24, 28, 32, 36],
+        "volcano": [10, 12, 14, 16],
+    }[theme][sub]
     _scatter_special(grid, PLATFORM_CHAR, platform_count, reserved, targets)
-    _scatter_special(grid, CRATE_CHAR, 5 + chapter * 2, reserved, targets)
-    hazard = {"forest": 6, "ocean": 10, "sky": 8, "volcano": 22}[theme]
+    crate_count = {
+        "forest": [6, 8, 10, 12],
+        "ocean": [4, 6, 8, 10],
+        "sky": [3, 4, 5, 6],
+        "volcano": [5, 7, 9, 11],
+    }[theme][sub] + chapter
+    _scatter_special(grid, CRATE_CHAR, crate_count, reserved, targets)
+    hazard = {
+        "forest": [4, 6, 8, 10],
+        "ocean": [8, 10, 12, 14],
+        "sky": [5, 6, 7, 8],
+        "volcano": [14, 18, 22, 26],
+    }[theme][sub]
     _scatter_special(grid, SPIKE_CHAR, hazard, reserved, targets)
 
     # 保底校验：玩家必须真的能从出生点走到宝箱和传送门，否则强行开路
@@ -431,7 +588,8 @@ class Level:
 
         self.enemy_shots = []
         self.spawn_timer = 0
-        self.spawn_interval = 8 * 60
+        self.spawn_base_interval = 9 * 60
+        self.spawn_interval = self.spawn_base_interval
 
         start_pos = (TILE_SIZE * 3, TILE_SIZE * 3)
 
@@ -520,7 +678,7 @@ class Level:
         size = (len(self.map_data[0]) * TILE_SIZE, len(self.map_data) * TILE_SIZE)
         self.map_surface = art.paint_map(pygame.Surface(size), self.map_data, level_index)
 
-        for _ in range(12 + chapter_of(level_index) * 4):
+        for _ in range(6 + chapter_of(level_index) * 2):
             self.spawn_enemy()
 
         # BOSS 出生在专门挖出来的竞技场里（体力型 BOSS 需要空间，也不会卡墙）
@@ -626,12 +784,12 @@ class Level:
                 ang = math.tau * i / BOSS_DROP_COUNT - math.pi / 2
                 px = cx + math.cos(ang) * 52 - 14
                 py = cy + math.sin(ang) * 40 - 6
-                self.items.append(Item(px, py, kind, quality=q,
-                                       weapon_type=self.weapon_type if kind == "weapon" else None,
-                                       label_dy=i * 4, set_key=self.set_key, hidden=hidden))
+                self.spawn_item(px, py, kind, quality=q,
+                                weapon_type=self.weapon_type if kind == "weapon" else None,
+                                label_dy=i * 4, set_key=self.set_key, hidden=hidden)
             if drop_key:
-                self.items.append(Item(cx - 5, cy + 55, "key", label_dy=0))
-            self.items.append(Item(cx + 40, cy + 40, "potion_hp", label_dy=8))
+                self.spawn_item(cx - 5, cy + 55, "key", label_dy=0)
+            self.spawn_item(cx + 40, cy + 40, "potion_hp", label_dy=8)
             return
 
         drop_chance = GEAR_DROP_ELITE if enemy.is_elite else GEAR_DROP_NORMAL
@@ -643,15 +801,15 @@ class Level:
             hidden = None
             if q == Q_RED and random.random() < MYTHIC_HIDDEN_CHANCE:
                 hidden = random.choice(list(HIDDEN_EFFECTS))
-            self.items.append(Item(
+            self.spawn_item(
                 enemy.rect.x, enemy.rect.y, drop_type, quality=q,
                 weapon_type=self.weapon_type if drop_type == "weapon" else None,
-                set_key=self.set_key, hidden=hidden))
+                set_key=self.set_key, hidden=hidden)
 
         if random.random() < (0.5 if enemy.is_elite else POTION_DROP_NORMAL):
             pool = ["potion_hp", "potion_hp", "potion_energy", "potion_energy",
                     "potion_speed", "bomb"]
-            self.items.append(Item(enemy.rect.x + 22, enemy.rect.y, random.choice(pool)))
+            self.spawn_item(enemy.rect.x + 22, enemy.rect.y, random.choice(pool))
 
         # 钥匙只由 BOSS 掉落
 
@@ -753,6 +911,87 @@ class Level:
     def solid(self):
         return self.walls + self.low_walls + self.platform_rects + self.crate_rects
 
+    def _drop_blockers(self):
+        blockers = self.solid[:]
+        if self.door_rect:
+            blockers.append(self.door_rect)
+        return blockers
+
+    def _settle_item(self, item):
+        blockers = self._drop_blockers()
+        if not any(item.rect.colliderect(w) for w in blockers):
+            return item
+        origin = item.rect.copy()
+        best = None
+        best_cost = None
+        for radius in range(0, 7):
+            for oy in range(-radius, radius + 1):
+                for ox in range(-radius, radius + 1):
+                    cand = origin.move(ox * 10, oy * 10)
+                    if cand.left < 4 or cand.top < 4:
+                        continue
+                    if cand.right > MAP_COLS * TILE_SIZE - 4 or cand.bottom > MAP_ROWS * TILE_SIZE - 4:
+                        continue
+                    if any(cand.colliderect(w) for w in blockers):
+                        continue
+                    cost = abs(ox) + abs(oy)
+                    if best is None or cost < best_cost:
+                        best = cand
+                        best_cost = cost
+            if best is not None:
+                break
+        if best is not None:
+            item.rect.topleft = best.topleft
+        item.update_physics(blockers)
+        return item
+
+    def spawn_item(self, x, y, type_name, quality="none", weapon_type=None, label_dy=0,
+                   set_key=None, hidden=None):
+        item = Item(x, y, type_name, quality=quality, weapon_type=weapon_type,
+                    label_dy=label_dy, set_key=set_key or self.set_key, hidden=hidden)
+        self._settle_item(item)
+        self.items.append(item)
+        return item
+
+    def _live_bosses(self):
+        return [b for b in getattr(self, "bosses", []) if b in self.enemies]
+
+    def _spawn_cap(self):
+        return [6, 8, 10, 12][chapter_of(self.level_index)]
+
+    def _nearby_spawn_cap(self):
+        return [4, 5, 6, 7][chapter_of(self.level_index)]
+
+    def _living_mobs(self):
+        return [e for e in self.enemies if not e.is_boss]
+
+    def _nearby_mob_count(self, radius=560):
+        px, py = self.player.rect.center
+        return sum(1 for e in self._living_mobs()
+                   if math.hypot(e.rect.centerx - px, e.rect.centery - py) <= radius)
+
+    def _can_spawn_enemy(self):
+        if self.boss_defeated:
+            return False
+        live_mobs = self._living_mobs()
+        if len(live_mobs) >= self._spawn_cap():
+            return False
+        if self._nearby_mob_count() >= self._nearby_spawn_cap():
+            return False
+        live_bosses = self._live_bosses()
+        if live_bosses:
+            nearest_boss = min(math.hypot(b.rect.centerx - self.player.rect.centerx,
+                                          b.rect.centery - self.player.rect.centery)
+                               for b in live_bosses)
+            if nearest_boss < 760:
+                return False
+        return True
+
+    def _update_spawn_interval(self):
+        cap = max(1, self._spawn_cap())
+        pressure = len(self._living_mobs()) / cap
+        self.spawn_interval = int(self.spawn_base_interval * (1.0 + pressure * 0.7))
+
     def collision_walls(self):
         """跳跃高度足够时，矮墙/平台不再挡路。"""
         blocked = self.walls + self.crate_rects
@@ -812,7 +1051,7 @@ class Level:
             self.crate_rects.remove(rect)
         self._clear_tile(rect.x, rect.y)
         kind = random.choice(["potion_hp", "potion_energy", "potion_speed", "bomb"])
-        self.items.append(Item(rect.centerx - 14, rect.centery - 14, kind))
+        self.spawn_item(rect.centerx - 14, rect.centery - 14, kind)
         self.effects.append(Shockwave(rect.centerx, rect.centery, 64, (255, 206, 130), 20, 6, 0.3))
         self.shake = max(self.shake, 4)
         audio.play("boom", 0.55)
@@ -915,6 +1154,8 @@ class Level:
     def kill_enemy(self, enemy):
         if enemy not in self.enemies:
             return
+        if enemy.is_summon and getattr(enemy, "summoner", None) is not None:
+            enemy.summoner.summon_count = max(0, getattr(enemy.summoner, "summon_count", 0) - 1)
         self.enemies.remove(enemy)
         # 后面的大关卡经验更高，保证 16 关下来能练到 45 级
         self.effects.append(SparkBurst(enemy.rect.centerx, enemy.rect.centery,
@@ -977,6 +1218,8 @@ class Level:
         px, py = self.player.rect.center
         kind = skill["type"]
         base = self.player.get_damage()
+        if kind in (SKILL_VOLLEY, "wave", "blast", "meteor"):
+            self.player.auto_aim(self, 620)
 
         if kind == SKILL_SPIN:
             damage = max(1, int(base * skill["mult"]))
@@ -1002,20 +1245,24 @@ class Level:
 
         elif kind == "wave":
             damage = max(1, int(base * skill["mult"]))
-            direction = 1 if self.player.facing_right else -1
+            shot_x, shot_y = self.player._shot_unit(0.5)
+            direction = 1 if shot_x >= 0 else -1
             px = self.player.rect.right if direction > 0 else self.player.rect.left - 40
             wave = Projectile(px, self.player.rect.centery - 20, direction, damage, "wave",
-                              max_dist=460, pierce=99, tint=skill["color"])
+                              max_dist=460, pierce=99, tint=skill["color"],
+                              vy=shot_y * 11, vx=shot_x * 11)
             wave.rect.height = 44
             self.player.projectiles.append(wave)
             self.shake = 4
 
         elif kind == "blast":
             damage = max(1, int(base * skill["mult"]))
-            direction = 1 if self.player.facing_right else -1
+            shot_x, shot_y = self.player._shot_unit(0.55)
+            direction = 1 if shot_x >= 0 else -1
             px = self.player.rect.right if direction > 0 else self.player.rect.left - 18
             arrow = Projectile(px, self.player.rect.centery - 6, direction, damage, "arrow",
-                               max_dist=420, pierce=1, tint=(255, 190, 140))
+                               max_dist=420, pierce=1, tint=(255, 190, 140),
+                               vy=shot_y * 11, vx=shot_x * 11)
             arrow.explode_radius = skill["radius"]
             self.player.projectiles.append(arrow)
             self.shake = 3
@@ -1092,8 +1339,8 @@ class Level:
                 d = math.hypot(enemy.rect.centerx - px, enemy.rect.centery - py)
                 if d < best:
                     best, target = d, enemy
-            tx = target.rect.centerx if target else px + (60 if self.player.facing_right else -60)
-            ty = target.rect.centery if target else py
+            tx = target.rect.centerx if target else px + int(self.player.aim_dx * 90)
+            ty = target.rect.centery if target else py + int(self.player.aim_dy * 70)
             self.effects.append(MeteorStrike(tx, ty, radius, skill["color"]))
             self.shake = 11
             audio.play("boom", 0.8)
@@ -1176,11 +1423,11 @@ class Level:
                 hidden = None
                 if q == Q_RED and random.random() < MYTHIC_HIDDEN_CHANCE:
                     hidden = random.choice(list(HIDDEN_EFFECTS))
-                self.items.append(Item(
+                self.spawn_item(
                     item.rect.centerx + random.randint(-36, 36),
                     item.rect.centery + random.randint(-20, 26),
                     kind, q, self.weapon_type if kind == "weapon" else None,
-                    set_key=self.set_key, hidden=hidden))
+                    set_key=self.set_key, hidden=hidden)
 
 
     # ---------------- 主循环 ----------------
@@ -1222,6 +1469,11 @@ class Level:
                 self.effects.append(CastCircle(fx_x, fx_y, (150, 200, 255)))
                 self.effects.append(SparkBurst(fx_x, fx_y - 22, (160, 210, 255),
                                                8, 1.8, 16, 3, -0.1))
+            elif kind == "cast_magic":
+                self.effects.append(CastCircle(fx_x, fx_y, (136, 208, 255), life=24))
+                self.effects.append(Shockwave(fx_x, fx_y - 10, 42, (122, 200, 255), 18, 4, 0.45))
+                self.effects.append(SparkBurst(fx_x, fx_y - 24, (188, 236, 255),
+                                               12, 2.1, 18, 3, -0.14))
         self.player.fx_queue.clear()
 
         # BOSS 战音乐：带迟滞，避免在范围边缘来回切换
@@ -1239,10 +1491,14 @@ class Level:
         if audio.music_name() != want:
             audio.play_music(want)
 
-        self.spawn_timer += 1
-        if self.spawn_timer >= self.spawn_interval:
-            self.spawn_timer = 0
-            self.spawn_enemy()
+        self._update_spawn_interval()
+        if self._can_spawn_enemy():
+            self.spawn_timer += 1
+            if self.spawn_timer >= self.spawn_interval:
+                self.spawn_timer = 0
+                self.spawn_enemy()
+        else:
+            self.spawn_timer = min(self.spawn_timer, max(0, self.spawn_interval - 90))
 
         for enemy in self.enemies[:]:
             enemy.update(self.solid, self.player, self)
@@ -1345,7 +1601,7 @@ class Level:
                         self.kill_enemy(enemy)
 
         for item in self.items[:]:
-            item.update_physics()
+            item.update_physics(self._drop_blockers())
             if not item.collected and self.player.rect.colliderect(item.rect):
                 self._pickup(item)
 
@@ -1368,8 +1624,22 @@ class Level:
     def spawn_enemy(self):
         if not self.empty_tiles:
             return
-        valid = [(ex, ey) for ex, ey in self.empty_tiles
-                 if abs(ex - self.player.rect.x) > 300]
+        px, py = self.player.rect.center
+        valid = []
+        for ex, ey in self.empty_tiles:
+            cx, cy = ex + TILE_SIZE // 2, ey + TILE_SIZE // 2
+            dist = math.hypot(cx - px, cy - py)
+            if dist < 320 or dist > 920:
+                continue
+            if math.hypot(cx - self.boss_center[0], cy - self.boss_center[1]) < 220:
+                continue
+            if any(math.hypot(cx - enemy.rect.centerx, cy - enemy.rect.centery) < 120
+                   for enemy in self.enemies if not enemy.is_boss):
+                continue
+            valid.append((ex, ey))
+        if not valid:
+            valid = [(ex, ey) for ex, ey in self.empty_tiles
+                     if 320 < math.hypot(ex - px, ey - py) < 920]
         if not valid:
             return
         sx, sy = random.choice(valid)

@@ -169,6 +169,7 @@ def discard_from_inventory(player, kind, idx):
 # --------------------------------------------------------------------------
 class Joystick:
     def __init__(self, center_x, center_y, radius=50):
+        self.home_x, self.home_y = center_x, center_y
         self.center_x, self.center_y = center_x, center_y
         self.radius = radius
         self.knob_x, self.knob_y = center_x, center_y
@@ -176,13 +177,21 @@ class Joystick:
         self.dx, self.dy = 0, 0
         self.finger = None
 
+    def reset(self):
+        self.finger = None
+        self.active = False
+        self.dx = self.dy = 0
+        self.center_x, self.center_y = self.home_x, self.home_y
+        self.knob_x, self.knob_y = self.home_x, self.home_y
+
     def _apply_offset(self, pos):
         ox, oy = pos[0] - self.center_x, pos[1] - self.center_y
         dist = math.hypot(ox, oy)
         if dist > self.radius:
             ox, oy = (ox / dist) * self.radius, (oy / dist) * self.radius
         self.knob_x, self.knob_y = self.center_x + ox, self.center_y + oy
-        self.dx, self.dy = ox / self.radius, oy / self.radius
+        self.dx = ox / self.radius
+        self.dy = oy / self.radius
 
     def touch_start(self, finger_id, pos):
         self.finger = finger_id
@@ -195,10 +204,7 @@ class Joystick:
 
     def touch_end(self, finger_id):
         if self.finger == finger_id:
-            self.finger = None
-            self.active = False
-            self.knob_x, self.knob_y = self.center_x, self.center_y
-            self.dx = self.dy = 0
+            self.reset()
 
     def handle_event(self, event):
         if self.finger is not None:
@@ -206,50 +212,178 @@ class Joystick:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if math.dist(event.pos, (self.center_x, self.center_y)) < self.radius * 1.5:
                 self.active = True
+                self._apply_offset(event.pos)
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-            self.active = False
-            self.knob_x, self.knob_y = self.center_x, self.center_y
-            self.dx, self.dy = 0, 0
+            self.reset()
         elif event.type == pygame.MOUSEMOTION and self.active:
             self._apply_offset(event.pos)
 
+    def update(self):
+        return
+
     def draw(self, screen):
-        pygame.draw.circle(screen, (100, 100, 110), (self.center_x, self.center_y), self.radius, 2)
-        pygame.draw.circle(screen, (150, 150, 160), (self.knob_x, self.knob_y), 20)
+        base = (92, 132, 186) if self.active else (98, 102, 126)
+        glow_alpha = 78 if self.active else 42
+        art.blit_glow(screen, self.center_x, self.center_y, self.radius + 24, base, glow_alpha)
+        pygame.draw.circle(screen, (12, 16, 24, 110), (self.center_x, self.center_y), self.radius + 10)
+        pygame.draw.circle(screen, (28, 34, 48), (self.center_x, self.center_y), self.radius + 2)
+        pygame.draw.circle(screen, (54, 64, 90), (self.center_x, self.center_y), self.radius - 6)
+        pygame.draw.circle(screen, _mix(base, (235, 245, 255), 0.55),
+                           (self.center_x, self.center_y), self.radius + 2, 3)
+        pygame.draw.circle(screen, (255, 255, 255, 30), (self.center_x, self.center_y),
+                           self.radius - 18)
+        for angle in (0, math.pi / 2, math.pi, math.pi * 1.5):
+            ox = math.cos(angle) * (self.radius - 14)
+            oy = math.sin(angle) * (self.radius - 14)
+            inner = (int(self.center_x + ox * 0.48), int(self.center_y + oy * 0.48))
+            outer = (int(self.center_x + ox), int(self.center_y + oy))
+            pygame.draw.line(screen, (180, 198, 226), inner, outer, 2)
+
+        knob_color = (132, 208, 255) if self.active else (172, 176, 190)
+        knob_radius = 24 if self.active else 22
+        pygame.draw.circle(screen, (8, 10, 18, 120), (int(self.knob_x), int(self.knob_y)), knob_radius + 5)
+        pygame.draw.circle(screen, _mix(knob_color, (28, 32, 48), 0.35),
+                           (int(self.knob_x), int(self.knob_y)), knob_radius)
+        pygame.draw.circle(screen, _mix(knob_color, (255, 255, 255), 0.35),
+                           (int(self.knob_x), int(self.knob_y)), knob_radius, 3)
+        pygame.draw.circle(screen, (255, 255, 255, 35),
+                           (int(self.knob_x - 6), int(self.knob_y - 7)), max(6, knob_radius // 3))
+
+
+def _mix(color_a, color_b, t):
+    return tuple(int(color_a[i] + (color_b[i] - color_a[i]) * t) for i in range(3))
+
+
+def _octagon_points(center, radius):
+    cut = max(6, int(radius * 0.38))
+    cx, cy = center
+    return [
+        (cx - radius + cut, cy - radius),
+        (cx + radius - cut, cy - radius),
+        (cx + radius, cy - radius + cut),
+        (cx + radius, cy + radius - cut),
+        (cx + radius - cut, cy + radius),
+        (cx - radius + cut, cy + radius),
+        (cx - radius, cy + radius - cut),
+        (cx - radius, cy - radius + cut),
+    ]
+
+
+def _scale_points(points, center, scale):
+    cx, cy = center
+    return [(int(cx + (x - cx) * scale), int(cy + (y - cy) * scale)) for x, y in points]
+
+
+def _press_scale(pressed_at, now, duration=140, min_scale=0.9):
+    if pressed_at is None:
+        return 1.0
+    age = now - pressed_at
+    if age < 0 or age >= duration:
+        return 1.0
+    t = age / duration
+    if t < 0.45:
+        return 1.0 - (1.0 - min_scale) * (t / 0.45)
+    return min_scale + (1.0 - min_scale) * ((t - 0.45) / 0.55)
+
+
+def _pixel_pulse(now, speed=0.012, low=0.18, high=0.58):
+    return low + (high - low) * (0.5 + 0.5 * math.sin(now * speed))
+
+
+def _draw_touch_pill(screen, rect, fill, border, text, font, text_color):
+    pygame.draw.rect(screen, (10, 12, 18, 120), rect.move(0, 2), border_radius=6)
+    pygame.draw.rect(screen, fill, rect, border_radius=6)
+    pygame.draw.rect(screen, border, rect, 2, border_radius=6)
+    shine = pygame.Rect(rect.x + 4, rect.y + 3, rect.w - 8, max(4, rect.h // 3))
+    pygame.draw.rect(screen, (255, 255, 255, 24), shine, border_radius=4)
+    for px, py in ((rect.left + 2, rect.top + 2), (rect.right - 4, rect.top + 2),
+                   (rect.left + 2, rect.bottom - 4), (rect.right - 4, rect.bottom - 4)):
+        pygame.draw.rect(screen, _mix(border, (255, 255, 255), 0.25), (px, py, 2, 2))
+    surf = font.render(text, True, text_color)
+    screen.blit(surf, surf.get_rect(center=rect.center))
+
+
+def _draw_round_action_button(screen, center, radius, base_color, label, font,
+                              text_color=(255, 255, 255), glow=None, tag=None, tag_font=None,
+                              pressed_at=None, now=0):
+    glow = glow or base_color
+    scale = _press_scale(pressed_at, now, min_scale=0.9)
+    outer = _scale_points(_octagon_points(center, radius + 6), center, scale)
+    inner = _scale_points(_octagon_points(center, radius), center, scale)
+    core = _scale_points(_octagon_points(center, max(12, radius - 8)), center, scale)
+    art.blit_glow(screen, center[0], center[1], int((radius + 20) * scale), glow, 64)
+    pygame.draw.polygon(screen, (12, 12, 20, 124), [(x, y + 4) for x, y in outer])
+    pygame.draw.polygon(screen, (44, 36, 56), outer)
+    pygame.draw.polygon(screen, _mix(base_color, (28, 24, 42), 0.45), inner)
+    pygame.draw.polygon(screen, _mix(base_color, (255, 244, 220), 0.18), core)
+    pygame.draw.polygon(screen, _mix(base_color, (255, 255, 255), 0.25), outer, 3)
+    top_shine = _scale_points([(center[0] - radius // 2, center[1] - radius // 2),
+                               (center[0] + radius // 2, center[1] - radius // 2),
+                               (center[0] + radius // 3, center[1] - radius // 5),
+                               (center[0] - radius // 3, center[1] - radius // 5)], center, scale)
+    pygame.draw.polygon(screen, (255, 255, 255, 24), top_shine)
+    icon = font.render(label, True, text_color)
+    icon_rect = icon.get_rect(center=(center[0], center[1] - 2 + int((1.0 - scale) * 16)))
+    screen.blit(icon, icon_rect)
+    if tag and tag_font:
+        pill = pygame.Rect(center[0] - 24, center[1] + radius - 4, 48, 18)
+        _draw_touch_pill(screen, pill, (26, 24, 34), _mix(base_color, (255, 255, 255), 0.45),
+                         tag, tag_font, (240, 236, 244))
 
 
 # --------------------------------------------------------------------------
 # 技能按钮
 # --------------------------------------------------------------------------
-def draw_skill_button(screen, rect, player, slot, font, small_font, key_label):
+def draw_skill_button(screen, rect, player, slot, font, small_font, key_label, pressed_at=None, now=0):
     skill = player.skill_at(slot)
     ready = player.skill_ready_at(slot)
     cd = player.skill_cds[slot]
     cd_max = max(1, player.skill_cd_maxs[slot])
     ratio = cd / cd_max
-
+    scale = _press_scale(pressed_at, now, min_scale=0.88)
+    accent = skill["color"] if ready else (104, 110, 124)
+    ring_color = _mix(accent, (255, 242, 208), 0.22)
+    outer = _scale_points(_octagon_points(rect.center, 36), rect.center, scale)
+    inner = _scale_points(_octagon_points(rect.center, 31), rect.center, scale)
+    core = _scale_points(_octagon_points(rect.center, 25), rect.center, scale)
     if ready:
-        art.blit_glow(screen, rect.centerx, rect.centery, 46, skill["color"], 70)
-    pygame.draw.circle(screen, (28, 28, 36), rect.center, 34)
-    pygame.draw.circle(screen, skill["color"] if ready else (74, 74, 86), rect.center, 34, 3)
-    pygame.draw.circle(screen, skill["color"] if ready else (58, 58, 68), rect.center, 28)
+        art.blit_glow(screen, rect.centerx, rect.centery, int(48 * scale), accent, 68)
+    elif cd > 0:
+        pulse_alpha = int(35 + 55 * _pixel_pulse(now, speed=0.01))
+        art.blit_glow(screen, rect.centerx, rect.centery, int(42 * scale), accent, pulse_alpha)
+    pygame.draw.polygon(screen, (8, 10, 18, 120), [(x, y + 4) for x, y in outer])
+    pygame.draw.polygon(screen, (42, 34, 54), outer)
+    pygame.draw.polygon(screen, _mix(accent, (26, 22, 38), 0.52), inner)
+    pygame.draw.polygon(screen, _mix(accent, (255, 244, 220), 0.15), core)
+    pygame.draw.polygon(screen, ring_color, outer, 3)
+    highlight = _scale_points([(rect.centerx - 18, rect.centery - 18), (rect.centerx + 18, rect.centery - 18),
+                               (rect.centerx + 12, rect.centery - 7), (rect.centerx - 12, rect.centery - 7)],
+                              rect.center, scale)
+    pygame.draw.polygon(screen, (255, 255, 255, 24), highlight)
 
     if cd > 0:
         cd_text = small_font.render(f"{cd / FPS:.1f}", True, (235, 235, 245))
-        screen.blit(cd_text, cd_text.get_rect(center=(rect.centerx, rect.centery - 2)))
-        arc_rect = pygame.Rect(rect.centerx - 34, rect.centery - 34, 68, 68)
-        pygame.draw.arc(screen, (255, 200, 230), arc_rect,
-                        -math.pi / 2, -math.pi / 2 + math.tau * ratio, 4)
+        screen.blit(cd_text, cd_text.get_rect(center=(rect.centerx, rect.centery - 1 + int((1.0 - scale) * 14))))
+        arc_rect = pygame.Rect(rect.centerx - 35, rect.centery - 35, 70, 70)
+        pulse_col = _mix((255, 212, 234), accent, 0.25 + 0.25 * _pixel_pulse(now, speed=0.009))
+        pygame.draw.arc(screen, pulse_col, arc_rect,
+                        -math.pi / 2, -math.pi / 2 + math.tau * ratio, 5)
+        pygame.draw.arc(screen, (120, 128, 144), arc_rect, -math.pi / 2,
+                        -math.pi / 2 + math.tau, 2)
     else:
         icon_color = (16, 12, 20) if ready else (150, 150, 160)
         icon = font.render(skill["icon"], True, icon_color)
-        screen.blit(icon, icon.get_rect(center=(rect.centerx, rect.centery - 2)))
+        screen.blit(icon, icon.get_rect(center=(rect.centerx, rect.centery - 2 + int((1.0 - scale) * 14))))
 
     name_color = skill["color"] if ready else (130, 130, 140)
     name_surf = small_font.render(skill["name"], True, name_color)
-    screen.blit(name_surf, name_surf.get_rect(center=(rect.centerx, rect.centery + 40)))
-    key_surf = small_font.render(key_label, True, (255, 226, 244))
-    screen.blit(key_surf, (rect.x + 4, rect.y + 2))
+    chip = pygame.Rect(rect.centerx - max(30, name_surf.get_width() // 2 + 10), rect.centery + 29,
+                       max(60, name_surf.get_width() + 20), 20)
+    _draw_touch_pill(screen, chip, (24, 24, 34), _mix(accent, (255, 255, 255), 0.36),
+                     skill["name"], small_font, name_color)
+    key_pill = pygame.Rect(rect.x - 2, rect.y - 4, 24, 18)
+    _draw_touch_pill(screen, key_pill, (18, 18, 28), _mix(accent, (255, 255, 255), 0.45),
+                     key_label, small_font, (255, 232, 245))
 
 
 # --------------------------------------------------------------------------
@@ -265,7 +399,8 @@ def draw_hud(screen, level, font, small_font, item_rects, collected_digits, show
 
     face = pygame.Rect(hud_rect.x + 12, hud_rect.y + 14, 62, 62)
     pygame.draw.rect(screen, (42, 34, 52), face, border_radius=10)
-    mini = art.player_sprite(armor_color, head_color)
+    dominant_set = pl.armor_set if pl.armor_quality != "none" else pl.weapon_set
+    mini = art.player_sprite(armor_color, head_color, pl.weapon_type, dominant_set)
     screen.blit(mini, (face.centerx - mini.get_width() // 2,
                        face.centery - mini.get_height() // 2 + 2))
     pygame.draw.rect(screen, (255, 208, 236), face, 2, border_radius=10)
@@ -324,6 +459,8 @@ def draw_hud(screen, level, font, small_font, item_rects, collected_digits, show
             chips.append((f"海水阻力 · 移速 -{loss}%", (140, 200, 255)))
         else:
             chips.append(("海底套装 · 免疫阻力", (150, 255, 200)))
+    if getattr(pl, "freeze_timer", 0) > 0:
+        chips.append((f"冻结 {pl.freeze_timer / FPS:.1f}s", (188, 235, 255)))
     if pl.chill_timer > 0:
         chips.append((f"冰冻 {pl.chill_timer / FPS:.1f}s · 抗性 "
                       f"{int(pl.status_resist('ocean') * 100)}%", (150, 220, 255)))
@@ -359,24 +496,27 @@ def draw_hud(screen, level, font, small_font, item_rects, collected_digits, show
         if math.hypot(e.rect.centerx - pl.rect.centerx,
                       e.rect.centery - pl.rect.centery) > 560:
             continue
-        bar_rect = pygame.Rect(WIDTH // 2 - 186, HEIGHT - 196, 372, 24)
-        art.panel(screen, bar_rect, accent=(255, 110, 170), radius=9, alpha=205)
-        inner = pygame.Rect(bar_rect.x + 6, bar_rect.y + 6, bar_rect.w - 12, bar_rect.h - 12)
+        panel_rect = pygame.Rect(WIDTH - 356, 92, 338, 38)
+        art.panel(screen, panel_rect, accent=(255, 110, 170), radius=10, alpha=210)
+        bar_rect = pygame.Rect(panel_rect.x + 8, panel_rect.y + 18, panel_rect.w - 16, 12)
+        inner = pygame.Rect(bar_rect.x, bar_rect.y, bar_rect.w, bar_rect.h)
         pygame.draw.rect(screen, (40, 16, 24), inner, border_radius=5)
         ratio = max(0.0, e.hp / e.max_hp)
         pygame.draw.rect(screen, (214, 48, 112),
                          (inner.x, inner.y, int(inner.w * ratio), inner.h), border_radius=5)
+        pygame.draw.rect(screen, (255, 188, 214), (inner.x + 2, inner.y + 2,
+                                                    max(0, int((inner.w - 4) * ratio)), 3), border_radius=2)
         name_surf = small_font.render(e.name, True, (255, 240, 246))
-        screen.blit(name_surf, (bar_rect.x + 8, bar_rect.y - 20))
+        screen.blit(name_surf, (panel_rect.x + 10, panel_rect.y + 2))
         hp_surf = small_font.render(f"{max(0, int(e.hp))} / {int(e.max_hp)}",
                                     True, (255, 255, 255))
-        screen.blit(hp_surf, (bar_rect.right - hp_surf.get_width() - 8, bar_rect.y - 20))
+        screen.blit(hp_surf, (panel_rect.right - hp_surf.get_width() - 10, panel_rect.y + 2))
         if e.cast_timer > 0:
             warn = small_font.render("技能蓄力中！", True, (255, 190, 120))
-            screen.blit(warn, (bar_rect.centerx - warn.get_width() // 2, bar_rect.y - 38))
+            screen.blit(warn, (panel_rect.centerx - warn.get_width() // 2, panel_rect.bottom + 3))
         if len(live_bosses) > 1:
             rest = small_font.render(f"剩余 BOSS ×{len(live_bosses)}", True, (255, 170, 200))
-            screen.blit(rest, (bar_rect.right + 10, bar_rect.y + 2))
+            screen.blit(rest, (panel_rect.x + 10, panel_rect.bottom + 3))
         break
 
 
@@ -400,7 +540,8 @@ def draw_stats_panel(screen, level, font, small_font, inv_rects, inv_actions, di
     pl = level.player
     armor_color = (72, 132, 204) if pl.armor_quality == "none" else Q_COLOR[pl.armor_quality]
     head_color = HAIR_COLOR if pl.helmet_quality == "none" else Q_COLOR[pl.helmet_quality]
-    spr = art.player_sprite(armor_color, head_color)
+    dominant_set = pl.armor_set if pl.armor_quality != "none" else pl.weapon_set
+    spr = art.player_sprite(armor_color, head_color, pl.weapon_type, dominant_set)
     base = pygame.Surface((spr.get_width() + 20, spr.get_height() + 20), pygame.SRCALPHA)
     base.blit(spr, (10, 18))
     art.draw_player_hat(base, 10, 18, pl.weapon_type, head_color)
@@ -423,7 +564,8 @@ def draw_stats_panel(screen, level, font, small_font, inv_rects, inv_actions, di
             art.draw_item_icon(screen, rect.x + 5, rect.y + 5, kind, q,
                                pl.weapon_type if kind == "weapon" else None, 0,
                                set_color=GEAR_SETS.get(getattr(pl, kind + "_set", "forest"),
-                                                       {}).get("color"))
+                                                       {}).get("color"),
+                               set_key=getattr(pl, kind + "_set", "forest"))
         else:
             pygame.draw.rect(screen, (80, 74, 92), rect, 1, border_radius=6)
             empty = small_font.render("空", True, (110, 106, 122))
@@ -527,7 +669,8 @@ def draw_stats_panel(screen, level, font, small_font, inv_rects, inv_actions, di
         pygame.draw.rect(screen, Q_COLOR.get(g["q"], (200, 200, 200)), rect, 1, border_radius=5)
         art.draw_item_icon(screen, rect.x + 3, rect.y + 3, g["kind"], g["q"],
                            pl.weapon_type if g["kind"] == "weapon" else None, 0,
-                           set_color=GEAR_SETS.get(g["set"], {}).get("color"))
+                           set_color=GEAR_SETS.get(g["set"], {}).get("color"),
+                           set_key=g["set"])
         if g["count"] > 1:
             badge = small_font.render(f"×{g['count']}", True, (255, 255, 255))
             pygame.draw.rect(screen, (24, 20, 30),
@@ -693,7 +836,8 @@ def draw_win_screen(screen, level, font, big_font, small_font):
         pl = level.player
         armor_color = (72, 132, 204) if pl.armor_quality == "none" else Q_COLOR[pl.armor_quality]
         head_color = HAIR_COLOR if pl.helmet_quality == "none" else Q_COLOR[pl.helmet_quality]
-        spr = art.player_sprite(armor_color, head_color)
+        dominant_set = pl.armor_set if pl.armor_quality != "none" else pl.weapon_set
+        spr = art.player_sprite(armor_color, head_color, pl.weapon_type, dominant_set)
         base = pygame.Surface((spr.get_width() + 24, spr.get_height() + 24), pygame.SRCALPHA)
         base.blit(spr, (12, 20))
         art.draw_player_hat(base, 12, 20, pl.weapon_type, head_color)
@@ -752,6 +896,7 @@ async def main():
         audio.set_music_enabled(False)
     if prefs.get("sfx") is False:
         audio.set_sfx_enabled(False)
+    audio.prewarm_music("boss", "victory")
     audio.play_music("menu")
     screen = None
     is_fullscreen = False
@@ -834,18 +979,19 @@ async def main():
 
     item_rects = [pygame.Rect(WIDTH // 2 - 122 + i * 62, HEIGHT - 70, 54, 54)
                   for i in range(len(ITEM_SLOTS))]
+    ui_feedback = {}
 
     inv_rects = []
     inv_actions = []
 
     menu_cards = [
-        (WEAPON_SWORD, "剑士", "近战 · 高防", (100, 100, 150), pygame.Rect(189, 214, 170, 200)),
-        (WEAPON_BOW, "弓箭手", "远程 · 灵活", (100, 150, 100), pygame.Rect(395, 214, 170, 200)),
-        (WEAPON_STAFF, "法师", "远程 · 高伤", (150, 100, 150), pygame.Rect(601, 214, 170, 200)),
+        (WEAPON_SWORD, "剑士", "近战 · 高防", (116, 114, 170), pygame.Rect(104, 184, 186, 244)),
+        (WEAPON_BOW, "弓箭手", "远程 · 灵活", (98, 158, 126), pygame.Rect(387, 184, 186, 244)),
+        (WEAPON_STAFF, "法师", "远程 · 高伤", (154, 112, 172), pygame.Rect(670, 184, 186, 244)),
     ]
     level_cards = [pygame.Rect(104 + i * 192, 190, 170, 210) for i in range(LEVELS_PER_CHAPTER)]
     chapter_tabs = [pygame.Rect(60 + i * 216, 108, 204, 40) for i in range(len(CHAPTERS))]
-    continue_btn = pygame.Rect(WIDTH // 2 - 220, 424, 440, 46)
+    continue_btn = pygame.Rect(WIDTH // 2 - 248, 438, 496, 62)
     fs_btn = pygame.Rect(WIDTH - 152, 14, 134, 34)
     music_btn = pygame.Rect(WIDTH - 412, 14, 124, 34)
     sfx_btn = pygame.Rect(WIDTH - 282, 14, 124, 34)
@@ -916,9 +1062,7 @@ async def main():
             selected_weapon_type = progress.get("weapon", WEAPON_SWORD)
         level = Level(idx, selected_weapon_type, existing_player=player_obj)
         audio.play_music(level_theme(idx), force=True)
-        joystick.active = False
-        joystick.knob_x, joystick.knob_y = joystick.center_x, joystick.center_y
-        joystick.dx = joystick.dy = 0
+        joystick.reset()
         persist()
 
     def return_to_menu():
@@ -935,6 +1079,9 @@ async def main():
         progress["cleared"] = []
         progress["player"] = None
         start_level(0, fresh=True)      # start_level 里的 persist 会写入当前槽
+
+    def press_ui(name):
+        ui_feedback[name] = pygame.time.get_ticks()
 
     def translate_event(raw):
         nonlocal show_stats_panel, show_map, show_pet
@@ -953,22 +1100,31 @@ async def main():
                 if math.dist(pos, (joystick.center_x, joystick.center_y)) < joystick.radius * 1.9:
                     joystick.touch_start(fid, pos)
                 elif attack_btn.collidepoint(pos):
-                    level.player.attack()
+                    press_ui("attack")
+                    level.player.attack(level)
                 elif skill_btn.collidepoint(pos):
+                    press_ui("skill0")
                     level.cast_skill(0)
                 elif skill2_btn.collidepoint(pos):
+                    press_ui("skill1")
                     level.cast_skill(1)
                 elif skill3_btn.collidepoint(pos):
+                    press_ui("skill2")
                     level.cast_skill(2)
                 elif jump_btn.collidepoint(pos):
+                    press_ui("jump")
                     level.player.jump()
                 elif bag_btn.collidepoint(pos):
+                    press_ui("bag")
                     show_stats_panel = True
                 elif map_btn.collidepoint(pos):
+                    press_ui("map")
                     show_map = True
                 elif pet_btn.collidepoint(pos):
+                    press_ui("pet")
                     show_pet = True
                 elif menu_btn.collidepoint(pos):
+                    press_ui("menu")
                     return_to_menu()
                 else:
                     for i, rect in enumerate(item_rects):
@@ -1034,7 +1190,7 @@ async def main():
                     if event.key == pygame.K_SPACE:
                         level.player.jump()
                     if event.key == pygame.K_j:
-                        level.player.attack()
+                        level.player.attack(level)
                     if event.key == pygame.K_k:
                         level.cast_skill(0)
                     if event.key == pygame.K_l:
@@ -1168,28 +1324,38 @@ async def main():
                     if event.button == 1:
                         joystick.handle_event(event)
                         if attack_btn.collidepoint(event.pos):
-                            level.player.attack()
+                            press_ui("attack")
+                            level.player.attack(level)
                         if skill_btn.collidepoint(event.pos):
+                            press_ui("skill0")
                             level.cast_skill(0)
                         if skill2_btn.collidepoint(event.pos):
+                            press_ui("skill1")
                             level.cast_skill(1)
                         if skill3_btn.collidepoint(event.pos):
+                            press_ui("skill2")
                             level.cast_skill(2)
                         if jump_btn.collidepoint(event.pos):
+                            press_ui("jump")
                             level.player.jump()
                         if bag_btn.collidepoint(event.pos):
+                            press_ui("bag")
                             show_stats_panel = not show_stats_panel
                             if not show_stats_panel:
                                 discard_mode = False
                         if map_btn.collidepoint(event.pos):
+                            press_ui("map")
                             show_map = not show_map
                         if pet_btn.collidepoint(event.pos):
+                            press_ui("pet")
                             show_pet = not show_pet
                         if menu_btn.collidepoint(event.pos):
+                            press_ui("menu")
                             return_to_menu()
                         for idx, rect in enumerate(item_rects):
                             if rect.collidepoint(event.pos):
                                 level.use_item(ITEM_SLOTS[idx])
+        joystick.update()
 
         audio.ensure_music()
         if toast_timer > 0:
@@ -1255,11 +1421,30 @@ async def main():
         if game_state == "menu":
             if audio.music_name() != "menu":
                 audio.play_music("menu")
-            screen.fill(BG_COLOR_CAVE)
+            screen.fill((16, 14, 24))
+            for y in range(0, HEIGHT, 6):
+                shade = 18 + y // 12
+                pygame.draw.rect(screen, (shade, shade - 2, shade + 10), (0, y, WIDTH, 6))
+            art.blit_glow(screen, 170, 94, 150, (120, 210, 150), 30)
+            art.blit_glow(screen, WIDTH // 2, 78, 220, (255, 164, 208), 38)
+            art.blit_glow(screen, WIDTH - 170, 102, 170, (140, 180, 255), 28)
+
+            hero_panel = pygame.Rect(WIDTH // 2 - 318, 50, 636, 104)
+            art.panel(screen, hero_panel, accent=(255, 196, 230), fill=(30, 24, 42), alpha=245, radius=16)
             title = big_font.render("解密·四界征战", True, GOLD_COLOR)
-            screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 64))
-            sub = font.render("选择职业，穿越森林 / 深海 / 天空 / 熔火四大关卡", True, (220, 206, 226))
-            screen.blit(sub, (WIDTH // 2 - sub.get_width() // 2, 120))
+            screen.blit(title, (hero_panel.centerx - title.get_width() // 2, hero_panel.y + 10))
+            pygame.draw.line(screen, (96, 80, 116),
+                             (hero_panel.x + 74, hero_panel.y + 42),
+                             (hero_panel.right - 74, hero_panel.y + 42), 1)
+            sub = small_font.render("选择职业，穿越森林 / 深海 / 天空 / 熔火四大关卡", True, (228, 216, 236))
+            screen.blit(sub, (hero_panel.centerx - sub.get_width() // 2, hero_panel.y + 50))
+            tags = [("森林", CHAPTERS[0]["color"]), ("海洋", CHAPTERS[1]["color"]),
+                    ("天空", CHAPTERS[2]["color"]), ("火山", CHAPTERS[3]["color"])]
+            for i, (label_txt, accent) in enumerate(tags):
+                badge = pygame.Rect(hero_panel.x + 82 + i * 120, hero_panel.y + 74, 92, 20)
+                art.panel(screen, badge, accent=accent, fill=(42, 32, 54), alpha=238, radius=8)
+                tag = small_font.render(label_txt, True, (245, 238, 246))
+                screen.blit(tag, (badge.centerx - tag.get_width() // 2, badge.centery - tag.get_height() // 2))
 
             mouse_pos = pygame.mouse.get_pos()
 
@@ -1267,9 +1452,9 @@ async def main():
             for i, tab in enumerate(slot_tabs):
                 info = save.slot_info(slot_data(i))
                 is_active = (i == active_slot)
-                accent = (255, 210, 240) if is_active else (120, 118, 145)
+                accent = (255, 214, 238) if is_active else (128, 126, 152)
                 art.panel(screen, tab, accent=accent,
-                          fill=(48, 34, 56) if is_active else (26, 24, 34),
+                          fill=(60, 40, 72) if is_active else (28, 24, 36),
                           alpha=238, radius=10)
                 head_txt = f"存档 {i + 1}"
                 if not info["empty"]:
@@ -1295,28 +1480,43 @@ async def main():
                     screen.blit(cross, (dr.centerx - cross.get_width() // 2,
                                         dr.centery - cross.get_height() // 2 - 1))
 
+            preview_sets = {WEAPON_SWORD: "volcano", WEAPON_BOW: "forest", WEAPON_STAFF: "sky"}
+            preview_heads = {WEAPON_SWORD: (190, 120, 110), WEAPON_BOW: (96, 188, 126), WEAPON_STAFF: (164, 132, 214)}
             for w_type, name, desc, color, rect in menu_cards:
                 hovered = rect.collidepoint(mouse_pos)
                 is_selected = (w_type == selected_weapon_type)
-                fill = tuple(min(255, c + 45) for c in color) if hovered else color
-                pygame.draw.rect(screen, fill, rect)
-                pygame.draw.rect(screen, GOLD_COLOR if (hovered or is_selected) else (40, 40, 60),
-                                 rect, 4 if hovered else 2)
-                art.draw_item_icon(screen, rect.centerx - 18, rect.y + 8, "weapon", Q_WHITE, w_type, 0)
-                name_surf = font.render(name, True, (255, 255, 255))
-                screen.blit(name_surf, (rect.centerx - name_surf.get_width() // 2, rect.y + 54))
-                desc_surf = small_font.render(desc, True, (225, 225, 235))
-                screen.blit(desc_surf, (rect.centerx - desc_surf.get_width() // 2, rect.y + 84))
-                pygame.draw.line(screen, (255, 255, 255, 60) if False else (80, 74, 96),
-                                 (rect.x + 16, rect.y + 108), (rect.right - 16, rect.y + 108), 1)
-                label = small_font.render("技能", True, (200, 196, 214))
-                screen.blit(label, (rect.centerx - label.get_width() // 2, rect.y + 114))
-                for i, slot in enumerate((0, 1, 2)):
+                accent = GOLD_COLOR if is_selected else tuple(min(255, c + 36) for c in color)
+                fill = (56, 40, 68) if hovered or is_selected else (34, 28, 44)
+                art.panel(screen, rect, accent=accent, fill=fill, alpha=244, radius=16)
+                if hovered:
+                    pygame.draw.rect(screen, (255, 240, 250), rect.inflate(8, 8), 2, border_radius=20)
+
+                art.blit_glow(screen, rect.centerx, rect.y + 72, 52, color, 36)
+                spr = art.player_sprite((110, 126, 180), preview_heads[w_type],
+                                        w_type, preview_sets[w_type])
+                spr = pygame.transform.scale(spr, (spr.get_width() * 2, spr.get_height() * 2))
+                screen.blit(spr, (rect.centerx - spr.get_width() // 2, rect.y + 26))
+                art.draw_item_icon(screen, rect.centerx + 44, rect.y + 22, "weapon", Q_WHITE, w_type, 0,
+                                   set_key=preview_sets[w_type])
+
+                name_surf = font.render(name, True, (255, 248, 252))
+                screen.blit(name_surf, (rect.centerx - name_surf.get_width() // 2, rect.y + 118))
+                desc_surf = small_font.render(desc, True, (220, 216, 232))
+                screen.blit(desc_surf, (rect.centerx - desc_surf.get_width() // 2, rect.y + 142))
+                badge = pygame.Rect(rect.x + 18, rect.y + 18, 58, 18)
+                art.panel(screen, badge, accent=color, fill=(34, 28, 40), alpha=232, radius=8)
+                klass = small_font.render("已选" if is_selected else "职业", True, (244, 238, 245))
+                screen.blit(klass, (badge.centerx - klass.get_width() // 2, badge.centery - klass.get_height() // 2))
+                pygame.draw.line(screen, (88, 76, 102), (rect.x + 18, rect.y + 166), (rect.right - 18, rect.y + 166), 1)
+                role_label = small_font.render("定位", True, (174, 168, 196))
+                screen.blit(role_label, (rect.x + 22, rect.y + 146))
+                skill_title = small_font.render("技能特性", True, (200, 196, 214))
+                screen.blit(skill_title, (rect.x + 22, rect.y + 174))
+                for i, _slot in enumerate((0, 1, 2)):
                     sk = [SKILL_BY_WEAPON, SKILL2_BY_WEAPON, SKILL3_BY_WEAPON][i][w_type]
                     key_hint = ("K", "L", "U")[i]
                     sk_surf = small_font.render(f"{key_hint}  {sk['name']}", True, sk["color"])
-                    screen.blit(sk_surf, (rect.centerx - sk_surf.get_width() // 2,
-                                          rect.y + 136 + i * 20))
+                    screen.blit(sk_surf, (rect.x + 22, rect.y + 194 + i * 15))
 
             # 全屏按钮
             if not is_web:
@@ -1351,19 +1551,21 @@ async def main():
                 hover = continue_btn.collidepoint(mouse_pos)
                 art.panel(screen, continue_btn,
                           accent=(255, 220, 240) if hover else (255, 170, 214),
-                          fill=(44, 30, 54), alpha=235, radius=12)
+                          fill=(52, 34, 66), alpha=238, radius=14)
                 lv_txt = ""
                 if progress.get("player"):
                     lv_txt = (f"Lv.{progress['player'].get('level', 1)}  "
                               f"{CLASS_NAME.get(progress['player'].get('weapon_type', WEAPON_SWORD), '剑士')}  ")
-                label = (f"继续冒险  ·  存档{active_slot + 1}    {lv_txt}"
-                         f"已通关 {len(progress['cleared'])}/{TOTAL_LEVELS}    [C]")
-                cont = small_font.render(label, True, (255, 226, 240))
-                screen.blit(cont, (continue_btn.centerx - cont.get_width() // 2,
-                                   continue_btn.centery - cont.get_height() // 2))
-            hint = small_font.render("点击职业卡片开始新游戏，或按 1 / 2 / 3（回车 = 当前选中）",
-                                     True, TEXT_COLOR)
-            screen.blit(hint, (WIDTH // 2 - hint.get_width() // 2, HEIGHT - 30))
+                cont_main = font.render("继续冒险", True, (255, 232, 242))
+                cont_sub = small_font.render(
+                    f"存档 {active_slot + 1}  ·  {lv_txt}已通关 {len(progress['cleared'])}/{TOTAL_LEVELS}  ·  按 C",
+                    True, (228, 206, 222))
+                screen.blit(cont_main, (continue_btn.centerx - cont_main.get_width() // 2, continue_btn.y + 7))
+                screen.blit(cont_sub, (continue_btn.centerx - cont_sub.get_width() // 2, continue_btn.y + 34))
+            hint = small_font.render("点击职业卡片开始新游戏", True, (206, 200, 218))
+            screen.blit(hint, (WIDTH // 2 - hint.get_width() // 2, HEIGHT - 42))
+            hint2 = small_font.render("快捷键：1 / 2 / 3 选择职业，回车确认当前职业", True, (170, 164, 188))
+            screen.blit(hint2, (WIDTH // 2 - hint2.get_width() // 2, HEIGHT - 24))
             # 退出游戏
             q_hover = quit_btn.collidepoint(mouse_pos)
             art.panel(screen, quit_btn,
@@ -1470,28 +1672,39 @@ async def main():
             level.draw(screen, cam_x, cam_y)
 
             if retry_timer == 0 and not show_stats_panel:
+                now = pygame.time.get_ticks()
                 joystick.draw(screen)
-                pygame.draw.circle(screen, (200, 50, 90), attack_btn.center, 45)
-                screen.blit(font.render("攻", True, (255, 255, 255)),
-                            (attack_btn.centerx - 12, attack_btn.centery - 14))
+                _draw_round_action_button(screen, attack_btn.center, 45, (214, 76, 126), "攻", font,
+                                          glow=(255, 96, 150), tag="ATT", tag_font=small_font,
+                                          pressed_at=ui_feedback.get("attack"), now=now)
 
-                draw_skill_button(screen, skill_btn, level.player, 0, font, small_font, "K")
-                draw_skill_button(screen, skill2_btn, level.player, 1, font, small_font, "L")
-                draw_skill_button(screen, skill3_btn, level.player, 2, font, small_font, "U")
+                draw_skill_button(screen, skill_btn, level.player, 0, font, small_font, "K",
+                                  pressed_at=ui_feedback.get("skill0"), now=now)
+                draw_skill_button(screen, skill2_btn, level.player, 1, font, small_font, "L",
+                                  pressed_at=ui_feedback.get("skill1"), now=now)
+                draw_skill_button(screen, skill3_btn, level.player, 2, font, small_font, "U",
+                                  pressed_at=ui_feedback.get("skill2"), now=now)
 
-                pygame.draw.circle(screen, (100, 200, 200), jump_btn.center, 30)
-                screen.blit(font.render("跳", True, (0, 0, 0)),
-                            (jump_btn.centerx - 12, jump_btn.centery - 14))
+                _draw_round_action_button(screen, jump_btn.center, 30, (88, 196, 214), "跳", font,
+                                          text_color=(8, 18, 26), glow=(110, 228, 244),
+                                          tag="JMP", tag_font=small_font,
+                                          pressed_at=ui_feedback.get("jump"), now=now)
 
-                for btn, text, col in ((bag_btn, "包", (200, 200, 200)),
-                                       (map_btn, "图", (190, 200, 220)),
-                                       (pet_btn, "宠", (220, 190, 230)),
-                                       (menu_btn, "菜单", (255, 200, 180))):
-                    pygame.draw.rect(screen, (48, 46, 60), btn)
-                    pygame.draw.rect(screen, col, btn, 2)
+                for key, btn, text, col in (("bag", bag_btn, "包", (200, 200, 200)),
+                                            ("map", map_btn, "图", (190, 200, 220)),
+                                            ("pet", pet_btn, "宠", (220, 190, 230)),
+                                            ("menu", menu_btn, "菜单", (255, 200, 180))):
+                    scale = _press_scale(ui_feedback.get(key), now, min_scale=0.93)
+                    draw_rect = btn.inflate(int(btn.w * (scale - 1.0)), int(btn.h * (scale - 1.0)))
+                    art.panel(screen, draw_rect, accent=col, fill=(40, 32, 54), alpha=228, radius=8)
+                    shine = pygame.Rect(draw_rect.x + 4, draw_rect.y + 4,
+                                        draw_rect.w - 8, max(6, draw_rect.h // 3))
+                    pygame.draw.rect(screen, (255, 255, 255, 18), shine, border_radius=4)
+                    pygame.draw.rect(screen, _mix(col, (255, 245, 220), 0.18),
+                                     (draw_rect.x + 3, draw_rect.y + 3, draw_rect.w - 6, 2))
                     t = font.render(text, True, col)
-                    screen.blit(t, (btn.centerx - t.get_width() // 2,
-                                    btn.centery - t.get_height() // 2))
+                    screen.blit(t, (draw_rect.centerx - t.get_width() // 2,
+                                    draw_rect.centery - t.get_height() // 2))
 
             draw_hud(screen, level, font, small_font, item_rects, collected_digits,
                      show_items=not show_stats_panel)

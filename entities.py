@@ -33,6 +33,7 @@ ROLE_NAME = {"warrior": "战士", "archer": "弓箭手", "mage": "法师", "boss
 ROLE_DMG_TYPE = {"warrior": DMG_PHYS, "archer": DMG_PHYS, "mage": DMG_MAGIC, "boss": DMG_PHYS}
 ROLE_COLOR = {"warrior": (255, 150, 120), "archer": (160, 230, 160),
               "mage": (170, 150, 255), "boss": (255, 120, 200)}
+_BOSS_WARN_CACHE = {}
 
 
 def _shade(color, factor=0.6):
@@ -43,22 +44,40 @@ def _light(color, amount=0.35):
     return tuple(min(255, int(c + (255 - c) * amount)) for c in color[:3])
 
 
+def _boss_warn_surface(radius):
+    surf = _BOSS_WARN_CACHE.get(radius)
+    if surf is not None:
+        return surf
+    surf = pygame.Surface((radius * 2 + 8, radius * 2 + 8), pygame.SRCALPHA)
+    pygame.draw.circle(surf, (255, 90, 60, 120), (radius + 4, radius + 4), radius, 4)
+    pygame.draw.circle(surf, (255, 220, 120, 60), (radius + 4, radius + 4),
+                       max(1, int(radius * 0.6)), 3)
+    _BOSS_WARN_CACHE[radius] = surf
+    return surf
+
+
 # --------------------------------------------------------------------------
 # 玩家的箭矢/法术弹
 # --------------------------------------------------------------------------
 class Projectile:
     def __init__(self, x, y, direction, damage, type_name, max_dist=300,
-                 vy=0.0, pierce=1, tint=None):
+                 vy=0.0, pierce=1, tint=None, vx=None):
         self.type = type_name
-        self.direction = direction
-        self.vy = vy
-        self.speed = 11 if type_name != "magic" else 9
+        self.p_type = type_name
+        self.direction = 1 if direction >= 0 else -1
         self.damage = damage
         self.max_dist = max_dist
         self.pierce = pierce
         self.tint = tint
         self.explode_radius = 0
         self.hits = set()
+        base_speed = 11 if type_name != "magic" else 9
+        self.vx = float(vx) if vx is not None else self.direction * base_speed
+        self.vy = float(vy)
+        if abs(self.vx) < 0.01:
+            self.vx = self.direction * max(1.0, base_speed * 0.35)
+        self.direction = 1 if self.vx >= 0 else -1
+        self.speed = max(0.01, math.hypot(self.vx, self.vy))
         self.x = float(x)
         self.y = float(y)
         self.start_x, self.start_y = self.x, self.y
@@ -66,11 +85,11 @@ class Projectile:
         self.rect = pygame.Rect(int(self.x), int(self.y), 18, 10)
 
     def update(self, walls):
-        self.x += self.direction * self.speed
+        self.x += self.vx
         self.y += self.vy
         self.rect.x = int(self.x)
         self.rect.y = int(self.y)
-        if abs(self.x - self.start_x) > self.max_dist or abs(self.y - self.start_y) > self.max_dist * 0.75:
+        if math.hypot(self.x - self.start_x, self.y - self.start_y) > self.max_dist:
             self.dead = True
         for wall in walls:
             if self.rect.colliderect(wall):
@@ -166,10 +185,19 @@ class Projectile:
         cx = self.rect.centerx - cam_x
         cy = self.rect.centery - cam_y
         if self.type == "magic":
-            art.blit_glow(screen, cx, cy, 18, (90, 220, 255), 110)
-            pygame.draw.circle(screen, (60, 170, 220), (cx, cy), 8)
-            pygame.draw.circle(screen, (150, 235, 255), (cx, cy), 5)
+            tail_dx = -self.direction * 12
+            for i, alpha in enumerate((44, 28, 16)):
+                px = int(cx + tail_dx * (0.35 + i * 0.28))
+                py = int(cy - self.vy * (1.5 + i * 0.5))
+                art.blit_glow(screen, px, py, 12 - i * 2, (120, 220, 255), alpha)
+            art.blit_glow(screen, cx, cy, 24, (90, 220, 255), 110)
+            pygame.draw.circle(screen, (60, 170, 220), (cx, cy), 9)
+            pygame.draw.circle(screen, (150, 235, 255), (cx, cy), 6)
             pygame.draw.circle(screen, (245, 255, 255), (cx - 1, cy - 1), 2)
+            for ang in (0, math.pi / 2, math.pi, math.pi * 1.5):
+                rx = int(cx + math.cos(ang) * 6)
+                ry = int(cy + math.sin(ang) * 6)
+                pygame.draw.line(screen, (210, 248, 255), (cx, cy), (rx, ry), 1)
             return
 
         color = self.tint or (238, 226, 190)
@@ -310,9 +338,18 @@ class Shockwave:
         alpha = int(220 * (1 - t) ** 1.4)
         if r <= 0:
             return
-        surf = pygame.Surface((r * 2 + 10, r * 2 + 10), pygame.SRCALPHA)
-        pygame.draw.circle(surf, (*self.color, alpha), (r + 5, r + 5), r, max(2, int(self.width * (1 - t))))
-        screen.blit(surf, (self.x - cam_x - r - 5, self.y - cam_y - r - 5))
+        surf = pygame.Surface((r * 2 + 16, r * 2 + 16), pygame.SRCALPHA)
+        pygame.draw.circle(surf, (*self.color, alpha // 6), (r + 8, r + 8), r)
+        pygame.draw.circle(surf, (*self.color, alpha), (r + 8, r + 8), r,
+                           max(2, int(self.width * (1 - t))))
+        inner = max(4, int(r * 0.58))
+        pygame.draw.circle(surf, (255, 248, 220, alpha // 3), (r + 8, r + 8), inner, 2)
+        for i in range(6):
+            ang = math.tau * i / 6 + t * 2.4
+            px = r + 8 + math.cos(ang) * inner
+            py = r + 8 + math.sin(ang) * inner
+            pygame.draw.circle(surf, (255, 255, 255, alpha // 2), (int(px), int(py)), 2)
+        screen.blit(surf, (self.x - cam_x - r - 8, self.y - cam_y - r - 8))
 
 
 class SpinBlades:
@@ -376,8 +413,13 @@ class FrostShards:
         t = self.life / self.max_life
         color = (170, 230, 255) if t > 0.5 else (225, 248, 255)
         for px, py, _, _ in self.particles:
-            size = 3 if t > 0.4 else 2
-            pygame.draw.rect(screen, color, (int(px - cam_x), int(py - cam_y), size, size))
+            size = 5 if t > 0.45 else 4
+            sx, sy = int(px - cam_x), int(py - cam_y)
+            art.blit_glow(screen, sx, sy, 10, color, 28)
+            pygame.draw.polygon(screen, color,
+                                [(sx, sy - size), (sx - size // 2, sy),
+                                 (sx, sy + size), (sx + size // 2, sy)])
+            pygame.draw.line(screen, (255, 255, 255), (sx, sy - size), (sx, sy + size), 1)
 
 
 class Beam:
@@ -483,6 +525,7 @@ class SparkBurst:
             r = max(1, int(self.size * s * k))
             surf = pygame.Surface((r * 2 + 2, r * 2 + 2), pygame.SRCALPHA)
             pygame.draw.circle(surf, (*col, int(230 * k)), (r + 1, r + 1), r)
+            pygame.draw.circle(surf, (255, 255, 255, int(120 * k)), (r + 1, r + 1), max(1, r - 1))
             screen.blit(surf, (int(x - cam_x) - r, int(y - cam_y) - r))
         if self.life > self.max_life * 0.55:
             r = int(16 * (1 - k) + 6)
@@ -517,9 +560,14 @@ class SlashArc:
         start = -1.15 if self.direction > 0 else math.pi - 1.15
         end = 1.15 if self.direction > 0 else math.pi + 1.15
         alpha = int(230 * k)
-        for w, a in ((10, alpha // 3), (6, alpha // 2), (3, alpha)):
+        for w, a in ((12, alpha // 4), (8, alpha // 2), (4, alpha)):
             pygame.draw.arc(surf, (*self.color, a), (cx - r, cy - r, r * 2, r * 2),
                             start, end, w)
+        for i in range(4):
+            trail_r = max(8, r - 10 - i * 8)
+            pygame.draw.arc(surf, (255, 255, 255, max(24, alpha // (5 + i))),
+                            (cx - trail_r, cy - trail_r, trail_r * 2, trail_r * 2),
+                            start, end, 2)
         # 刀尖亮光
         tip_ang = end if self.direction > 0 else start
         tx = cx + math.cos(tip_ang) * r
@@ -553,11 +601,18 @@ class CastCircle:
         alpha = int(220 * k)
         pygame.draw.ellipse(surf, (*self.color, alpha), (cx - r, cy - r // 3, r * 2, r // 2), 2)
         pygame.draw.ellipse(surf, (*self.color, alpha // 2), (cx - r // 2, cy - r // 5, r, r // 3), 2)
+        pygame.draw.ellipse(surf, (255, 255, 255, alpha // 4),
+                            (cx - r + 10, cy - r // 3 + 4, r * 2 - 20, max(8, r // 2 - 8)), 1)
         for i in range(6):
             ang = math.tau * i / 6 + t * 2.2
             px = cx + math.cos(ang) * r * 0.8
             py = cy + math.sin(ang) * r * 0.28
             pygame.draw.circle(surf, (255, 255, 255, alpha), (int(px), int(py)), 2)
+        for i in range(4):
+            ang = math.tau * i / 4 - t * 2.5
+            px = cx + math.cos(ang) * r * 0.45
+            py = cy + math.sin(ang) * r * 0.16
+            pygame.draw.rect(surf, (*self.color, alpha // 2), (int(px) - 2, int(py) - 2, 4, 4), 1)
         pygame.draw.circle(surf, (*self.color, alpha), (cx, int(cy - r * 0.35)), 3)
         screen.blit(surf, (int(self.x - cam_x) - cx, int(self.y - cam_y) - cy))
 
@@ -593,6 +648,8 @@ class LightningFX:
         k = max(0.0, self.life / self.max_life)
         width = 1 + int(3 * k)
         pts = [(x - cam_x, y - cam_y) for x, y in self.pts]
+        for p in pts[1:-1]:
+            art.blit_glow(screen, int(p[0]), int(p[1]), 10, self.color, int(24 * k))
         pygame.draw.lines(screen, (255, 255, 255), False, pts, width + 1)
         pygame.draw.lines(screen, self.color, False, pts, width)
         for (ax, ay), (bx, by) in self.branches:
@@ -650,6 +707,8 @@ class GroundCracks:
             pygame.draw.lines(screen, (*self.color, ), False, pts, 2)
             if k > 0.6:
                 pygame.draw.lines(screen, (255, 240, 200), False, pts, 1)
+            elif k > 0.25:
+                pygame.draw.lines(screen, (255, 180, 100), False, pts, 1)
         for dx, dy, _vx, _vy, r in self.dust:
             a = int(150 * k)
             surf = pygame.Surface((int(r * 2) + 4, int(r * 2) + 4), pygame.SRCALPHA)
@@ -688,6 +747,7 @@ class ArrowStormFX:
             if delay > 0:
                 continue
             sx, sy = ax - cam_x, ay - cam_y
+            art.blit_glow(screen, int(sx), int(sy - 12), 12, self.color, int(28 * k))
             pygame.draw.line(screen, self.color, (sx, sy - 46), (sx, sy - 10), 2)
             pygame.draw.polygon(screen, (255, 255, 255),
                                 [(sx, sy), (sx - 4, sy - 10), (sx + 4, sy - 10)])
@@ -889,6 +949,9 @@ class Player:
         self.hp = self.max_hp
 
         self.facing_right = True
+        self.aim_dx = 1.0
+        self.aim_dy = 0.0
+        self.aim_lock_timer = 0
         self.z = 0
         self.vz = 0
         self.jump_count = 0
@@ -903,6 +966,7 @@ class Player:
 
         self.fx_queue = []
         self.chill_timer = 0
+        self.freeze_timer = 0
         self.burn_timer = 0
         self.env_speed_mult = 1.0
         self.skill_cds = [0, 0, 0]
@@ -985,10 +1049,15 @@ class Player:
             audio.play("jump", 0.5)
 
     def move(self, dx, dy, walls):
-        if dx > 0:
-            self.facing_right = True
-        if dx < 0:
-            self.facing_right = False
+        if self.freeze_timer > 0:
+            self._acc_x = getattr(self, "_acc_x", 0.0) * 0.35
+            self._acc_y = getattr(self, "_acc_y", 0.0) * 0.35
+            return
+        if self.aim_lock_timer <= 0:
+            if dx > 0:
+                self.set_aim_vector(1, 0, lock=0)
+            if dx < 0:
+                self.set_aim_vector(-1, 0, lock=0)
 
         speed = self.move_speed * (SPEED_POTION_MULT if self.speed_bonus_timer > 0 else 1.0)
         speed *= self.env_speed_mult
@@ -996,28 +1065,111 @@ class Player:
             speed *= 0.55
         if self.has_hidden("swift"):
             speed *= 1.08
+        assist = 6
+
+        def move_axis(axis, amount):
+            if amount == 0:
+                return False
+            if axis == "x":
+                self.rect.x += amount
+            else:
+                self.rect.y += amount
+            for wall in walls:
+                if self.rect.colliderect(wall):
+                    if axis == "x":
+                        if amount > 0:
+                            self.rect.right = wall.left
+                        else:
+                            self.rect.left = wall.right
+                    else:
+                        if amount > 0:
+                            self.rect.bottom = wall.top
+                        else:
+                            self.rect.top = wall.bottom
+                    return True
+            return False
+
+        def try_corner_slide(primary_axis, primary_amount, secondary_axis, secondary_dir):
+            if primary_amount == 0 or secondary_dir == 0:
+                return False
+            start = self.rect.topleft
+            for offset in range(1, assist + 1):
+                if secondary_axis == "y":
+                    self.rect.y += secondary_dir * offset
+                else:
+                    self.rect.x += secondary_dir * offset
+                blocked = any(self.rect.colliderect(w) for w in walls)
+                if blocked:
+                    self.rect.topleft = start
+                    continue
+                if not move_axis(primary_axis, primary_amount):
+                    return True
+                self.rect.topleft = start
+            self.rect.topleft = start
+            return False
+
         # 用小数累积，避免每帧取整把 8% 之类的加成抹掉
         self._acc_x = getattr(self, "_acc_x", 0.0) + dx * speed
         step_x = int(self._acc_x)
         self._acc_x -= step_x
-        self.rect.x += step_x
-        for wall in walls:
-            if self.rect.colliderect(wall):
-                if dx > 0:
-                    self.rect.right = wall.left
-                if dx < 0:
-                    self.rect.left = wall.right
+        blocked_x = move_axis("x", step_x)
+        if blocked_x:
+            try_corner_slide("x", step_x, "y", -1 if dy < 0 else (1 if dy > 0 else 0))
 
         self._acc_y = getattr(self, "_acc_y", 0.0) + dy * speed
         step_y = int(self._acc_y)
         self._acc_y -= step_y
-        self.rect.y += step_y
-        for wall in walls:
-            if self.rect.colliderect(wall):
-                if dy > 0:
-                    self.rect.bottom = wall.top
-                if dy < 0:
-                    self.rect.top = wall.bottom
+        blocked_y = move_axis("y", step_y)
+        if blocked_y:
+            try_corner_slide("y", step_y, "x", -1 if dx < 0 else (1 if dx > 0 else 0))
+
+    def set_aim_vector(self, dx, dy, lock=18):
+        dist = math.hypot(dx, dy)
+        if dist <= 0.001:
+            return
+        self.aim_dx = dx / dist
+        self.aim_dy = dy / dist
+        if abs(self.aim_dx) > 0.08:
+            self.facing_right = self.aim_dx >= 0
+        self.aim_lock_timer = max(self.aim_lock_timer, lock)
+
+    def set_aim_towards(self, x, y, lock=18):
+        self.set_aim_vector(x - self.rect.centerx, y - self.rect.centery, lock)
+
+    def aim_sign(self):
+        return 1 if self.aim_dx >= 0 else -1
+
+    def pick_target(self, level, radius=520):
+        if level is None:
+            return None
+        best = None
+        best_dist = radius
+        px, py = self.rect.center
+        for enemy in level.enemies:
+            if enemy.dead:
+                continue
+            dist = math.hypot(enemy.rect.centerx - px, enemy.rect.centery - py)
+            if dist < best_dist:
+                best_dist = dist
+                best = enemy
+        return best
+
+    def auto_aim(self, level, radius=520):
+        target = self.pick_target(level, radius)
+        if target is not None:
+            self.set_aim_towards(target.rect.centerx, target.rect.centery, lock=26)
+        return target
+
+    def _shot_unit(self, min_horizontal=0.45):
+        ax, ay = self.aim_dx, self.aim_dy
+        sign = 1 if ax >= 0 else -1
+        ax = abs(ax)
+        if ax < min_horizontal:
+            ax = min_horizontal
+        norm = math.hypot(ax, ay)
+        if norm <= 0.001:
+            return float(sign), 0.0
+        return sign * ax / norm, ay / norm
 
     QUALITY_WEIGHT = {Q_WHITE: 0.2, Q_SILVER: 0.4, Q_PURPLE: 0.6,
                       Q_GOLD: 0.8, Q_RED: 1.0}
@@ -1043,52 +1195,66 @@ class Player:
                 total += self.QUALITY_WEIGHT[q] * 0.12
         return min(0.72, total)
 
+    def freeze(self, frames):
+        self.freeze_timer = max(self.freeze_timer, frames)
+
     @property
     def crit_chance(self):
         bonus = {Q_SILVER: 0.01, Q_PURPLE: 0.02, Q_GOLD: 0.035, Q_RED: 0.05}
         extra = 0.08 if self.has_hidden("crit") else 0.0
         return min(0.7, 0.06 + self.level * 0.005 + bonus.get(self.bracelet_quality, 0.0) + extra)
 
-    def attack(self):
+    def attack(self, level=None):
         if self.attack_cooldown > 0:
             return
+        if self.weapon_type == WEAPON_SWORD:
+            self.auto_aim(level, 120)
+        else:
+            self.auto_aim(level, 560)
         self.is_attacking = True
         haste = (1 - PET_HASTE) if self.pet_haste else 1.0
 
         if self.weapon_type == WEAPON_SWORD:
+            direction = self.aim_sign()
             self.attack_timer = 12
             self.attack_cooldown = int(22 * haste)
             audio.play("slash")
-            self.fx_queue.append(("slash", self.rect.centerx + (26 if self.facing_right else -26),
-                                  self.rect.centery, 1 if self.facing_right else -1))
+            self.fx_queue.append(("slash", self.rect.centerx + 26 * direction,
+                                  self.rect.centery, direction))
             bonus_range = (self.level // 2) * 5
-            if self.facing_right:
+            if direction > 0:
                 self.attack_rect = pygame.Rect(self.rect.right, self.rect.y, 40 + bonus_range, 48)
             else:
                 self.attack_rect = pygame.Rect(self.rect.left - 40 - bonus_range, self.rect.y, 40 + bonus_range, 48)
         elif self.weapon_type == WEAPON_BOW:
+            direction = self.aim_sign()
             self.attack_timer = 10
             self.attack_cooldown = int(22 * haste)
             self.spawn_projectile("arrow")
             audio.play("shot")
-            self.fx_queue.append(("shot", self.rect.centerx + (18 if self.facing_right else -18),
-                                  self.rect.centery - 2, 1 if self.facing_right else -1))
+            self.fx_queue.append(("shot", self.rect.centerx + 18 * direction,
+                                  self.rect.centery - 2, direction))
         elif self.weapon_type == WEAPON_STAFF:
+            self.auto_aim(level, 620)
             self.attack_timer = 15
             self.attack_cooldown = int(34 * haste)
             self.spawn_projectile("magic")
             audio.play("spell")
-            self.fx_queue.append(("cast", self.rect.centerx, self.rect.bottom - 2,
-                                  1 if self.facing_right else -1))
+            self.fx_queue.append(("cast_magic", self.rect.centerx, self.rect.bottom - 2,
+                                  self.aim_sign()))
 
         self.energy = min(MAX_ENERGY, self.energy + 15 + (8 if self.has_hidden("mana") else 0))
 
     def spawn_projectile(self, p_type):
-        proj_x = self.rect.right if self.facing_right else self.rect.left - 16
-        proj_y = self.rect.centery - 4
-        direction = 1 if self.facing_right else -1
+        speed = 11 if p_type != "magic" else 9
+        shot_x, shot_y = self._shot_unit(0.42 if p_type == "magic" else 0.5)
+        direction = 1 if shot_x >= 0 else -1
+        proj_x = self.rect.right if direction > 0 else self.rect.left - 16
+        proj_y = self.rect.centery - 4 + int(shot_y * 8)
         max_dist = (300 if p_type == "arrow" else 250) + (self.level - 1) * 40
-        self.projectiles.append(Projectile(proj_x, proj_y, direction, self.get_damage(), p_type, max_dist))
+        self.projectiles.append(Projectile(
+            proj_x, proj_y, direction, self.get_damage(), p_type, max_dist,
+            vy=shot_y * speed, vx=shot_x * speed))
 
     def try_skill(self, slot=0):
         cost = self.skill_cost(slot)
@@ -1103,15 +1269,25 @@ class Player:
         return skill
 
     def spawn_volley(self, count, damage, spread=0.34):
-        direction = 1 if self.facing_right else -1
-        base_x = self.rect.right if self.facing_right else self.rect.left - 16
-        base_y = self.rect.centery - 4
+        speed = 11
+        base_x_dir, base_y_dir = self._shot_unit(0.55)
+        perp_x, perp_y = -base_y_dir, base_x_dir
         for i in range(count):
             offset = i - (count - 1) / 2
-            vy = offset * spread * 6.0
+            vx = base_x_dir + perp_x * offset * spread
+            vy = base_y_dir + perp_y * offset * spread
+            norm = math.hypot(vx, vy)
+            if norm <= 0.001:
+                vx, vy = base_x_dir, base_y_dir
+                norm = 1.0
+            vx /= norm
+            vy /= norm
+            direction = 1 if vx >= 0 else -1
+            base_x = self.rect.right if direction > 0 else self.rect.left - 16
+            base_y = self.rect.centery - 4 + int(vy * 8)
             self.projectiles.append(Projectile(
                 base_x, base_y, direction, damage, "arrow",
-                max_dist=430, vy=vy, pierce=3, tint=(190, 255, 190)))
+                max_dist=430, vy=vy * speed, pierce=3, tint=(190, 255, 190), vx=vx * speed))
 
     def get_damage(self):
         base = INIT_SWORD_DMG if self.weapon_type == WEAPON_SWORD else (
@@ -1244,6 +1420,8 @@ class Player:
         self.anim += 1
         if self.invincible_timer > 0:
             self.invincible_timer -= 1
+        if self.aim_lock_timer > 0:
+            self.aim_lock_timer -= 1
         if self.attack_cooldown > 0:
             self.attack_cooldown -= 1
         for i in range(3):
@@ -1259,6 +1437,8 @@ class Player:
             self.speed_bonus_timer -= 1
         if self.chill_timer > 0:
             self.chill_timer -= 1
+        if self.freeze_timer > 0:
+            self.freeze_timer -= 1
 
         if self.z > self.floor_z or self.vz > 0:
             self.z += self.vz
@@ -1293,7 +1473,10 @@ class Player:
 
         armor_color = (72, 132, 204) if self.armor_quality == "none" else Q_COLOR[self.armor_quality]
         head_color = HAIR_COLOR if self.helmet_quality == "none" else Q_COLOR[self.helmet_quality]
-        spr = art.player_sprite(armor_color, head_color)
+        dominant_set = self.armor_set if self.armor_quality != "none" else self.weapon_set
+        spr = art.player_sprite(armor_color, head_color, self.weapon_type, dominant_set)
+        if self.freeze_timer > 0:
+            spr = art.tint(spr, (170, 226, 255, 150))
 
         bob = 0 if (self.z > 0 or not self.is_attacking) else int(math.sin(self.anim * 0.35) * 1)
         sx = self.rect.centerx - cam_x - spr.get_width() // 2
@@ -1307,6 +1490,9 @@ class Player:
 
     def _draw_weapon(self, screen, sx, sy):
         c_w = Q_COLOR.get(self.weapon_quality, (150, 150, 150))
+        style = art.gear_style(self.weapon_set)
+        trim = _light(style["trim"], 0.1)
+        rune = style["rune"]
         right = self.facing_right
         hx = sx + (31 if right else 1)
         hy = sy + 12
@@ -1316,33 +1502,58 @@ class Player:
                 progress = (12 - self.attack_timer) / 12.0
                 surf = pygame.Surface((120, 120), pygame.SRCALPHA)
                 start = -1.57 + progress * 2.0
-                pygame.draw.arc(surf, (*c_w, 210), (14, 14, 92, 92), start, start + 1.7, 9)
+                pygame.draw.arc(surf, (*trim, 180), (12, 12, 96, 96), start, start + 1.7, 11)
+                pygame.draw.arc(surf, (*c_w, 220), (16, 16, 88, 88), start, start + 1.7, 8)
                 pygame.draw.arc(surf, (255, 232, 246, 150), (22, 22, 76, 76), start, start + 1.7, 3)
                 screen.blit(surf, (sx - 14, sy - 20))
             else:
-                pygame.draw.rect(screen, _shade(c_w), (hx - 1, hy - 2, 7, 26))
-                pygame.draw.rect(screen, c_w, (hx, hy - 3, 5, 24))
-                pygame.draw.rect(screen, _light(c_w, 0.55), (hx + 1, hy - 2, 2, 20))
-                pygame.draw.polygon(screen, _light(c_w, 0.3), [(hx, hy - 3), (hx + 5, hy - 3), (hx + 2, hy - 9)])
-                pygame.draw.rect(screen, (206, 158, 54), (hx - 5, hy + 20, 15, 4))
-                pygame.draw.rect(screen, (120, 72, 32), (hx, hy + 24, 5, 7))
+                pygame.draw.rect(screen, _shade(c_w), (hx - 1, hy - 4, 7, 28))
+                pygame.draw.rect(screen, c_w, (hx, hy - 5, 5, 26))
+                pygame.draw.rect(screen, _light(c_w, 0.55), (hx + 1, hy - 4, 2, 21))
+                pygame.draw.polygon(screen, trim, [(hx - 5, hy + 18), (hx + 10, hy + 18),
+                                                   (hx + 7, hy + 22), (hx - 2, hy + 22)])
+                if self.weapon_set == "forest":
+                    pygame.draw.polygon(screen, style["trim"], [(hx + 2, hy - 12), (hx + 6, hy - 6), (hx - 1, hy - 5)])
+                elif self.weapon_set == "ocean":
+                    pygame.draw.circle(screen, style["rune"], (hx + 2, hy - 8), 3)
+                elif self.weapon_set == "sky":
+                    pygame.draw.line(screen, style["rune"], (hx - 2, hy + 1), (hx + 7, hy - 7), 2)
+                else:
+                    pygame.draw.rect(screen, style["trim"], (hx - 1, hy + 3, 7, 2))
+                pygame.draw.rect(screen, (120, 72, 32), (hx, hy + 22, 5, 8))
+                pygame.draw.rect(screen, rune, (hx + 1, hy + 24, 2, 2))
         elif self.weapon_type == WEAPON_BOW:
+            bow_col = _light(trim, 0.08)
             if right:
-                pygame.draw.lines(screen, _shade(c_w), False,
-                                  [(hx + 1, hy - 10), (hx + 9, hy - 2), (hx + 9, hy + 10),
-                                   (hx + 1, hy + 18)], 4)
-                pygame.draw.line(screen, (238, 238, 244), (hx + 1, hy - 9), (hx + 1, hy + 17), 1)
+                pygame.draw.lines(screen, _shade(bow_col), False,
+                                  [(hx + 1, hy - 12), (hx + 10, hy - 4), (hx + 10, hy + 10),
+                                   (hx + 1, hy + 20)], 4)
+                pygame.draw.line(screen, (238, 238, 244), (hx + 1, hy - 11), (hx + 1, hy + 19), 1)
+                pygame.draw.rect(screen, rune, (hx + 3, hy + 1, 10, 2))
             else:
-                pygame.draw.lines(screen, _shade(c_w), False,
-                                  [(hx - 1, hy - 10), (hx - 9, hy - 2), (hx - 9, hy + 10),
-                                   (hx - 1, hy + 18)], 4)
-                pygame.draw.line(screen, (238, 238, 244), (hx - 1, hy - 9), (hx - 1, hy + 17), 1)
+                pygame.draw.lines(screen, _shade(bow_col), False,
+                                  [(hx - 1, hy - 12), (hx - 10, hy - 4), (hx - 10, hy + 10),
+                                   (hx - 1, hy + 20)], 4)
+                pygame.draw.line(screen, (238, 238, 244), (hx - 1, hy - 11), (hx - 1, hy + 19), 1)
+                pygame.draw.rect(screen, rune, (hx - 9, hy + 1, 10, 2))
+            if self.weapon_set == "forest":
+                pygame.draw.polygon(screen, style["trim"], [(hx + (6 if right else -6), hy - 9),
+                                                            (hx + (12 if right else -12), hy - 4),
+                                                            (hx + (6 if right else -6), hy)])
+            elif self.weapon_set == "sky":
+                pygame.draw.line(screen, style["rune"], (hx + (7 if right else -7), hy - 6),
+                                 (hx + (13 if right else -13), hy - 10), 2)
         elif self.weapon_type == WEAPON_STAFF:
             pygame.draw.rect(screen, (120, 76, 40), (hx, hy - 8, 5, 30))
-            art.blit_glow(screen, hx + 2, hy - 12, 16, c_w, 90)
-            pygame.draw.circle(screen, _shade(c_w), (hx + 2, hy - 12), 8)
-            pygame.draw.circle(screen, c_w, (hx + 2, hy - 12), 5)
+            art.blit_glow(screen, hx + 2, hy - 12, 18, trim, 95)
+            pygame.draw.circle(screen, _shade(trim), (hx + 2, hy - 12), 8)
+            pygame.draw.circle(screen, trim, (hx + 2, hy - 12), 5)
+            pygame.draw.circle(screen, rune, (hx + 2, hy - 12), 2)
             pygame.draw.circle(screen, _light(c_w, 0.7), (hx + 1, hy - 14), 2)
+            if self.weapon_set in ("sky", "ocean"):
+                pygame.draw.line(screen, style["metal"], (hx - 3, hy - 12), (hx + 7, hy - 12), 2)
+            elif self.weapon_set == "volcano":
+                pygame.draw.polygon(screen, style["trim"], [(hx + 2, hy - 20), (hx + 6, hy - 12), (hx - 2, hy - 12)])
 
 
 # --------------------------------------------------------------------------
@@ -1593,12 +1804,27 @@ class Pet:
         cx = self.rect.centerx - cam_x
         cy = self.rect.centery - cam_y
         radius = 26 + self.stage * 8
-        art.blit_glow(screen, cx, cy, radius, self.color, 52 + self.stage * 8)
+        pulse = 0.75 + math.sin(self.anim * 0.12) * 0.12
+        art.blit_glow(screen, cx, cy, int(radius * pulse), self.color, 56 + self.stage * 8)
+        orbit_count = 3 + self.stage
+        for i in range(orbit_count):
+            ang = self.anim * 0.06 + i * math.tau / orbit_count
+            orb_x = int(cx + math.cos(ang) * (12 + self.stage * 4))
+            orb_y = int(cy + math.sin(ang * 1.2) * (7 + self.stage * 2) - 5)
+            orb_r = 2 + (1 if i % 2 == 0 else 0)
+            art.blit_glow(screen, orb_x, orb_y, 8 + self.stage * 2, self.color, 34)
+            pygame.draw.circle(screen, art._light(self.color, 0.45), (orb_x, orb_y), orb_r)
         if self.stage >= 2:
             ring = int(radius + 6 + 3 * math.sin(self.anim * 0.12))
             pygame.draw.circle(screen, self.color, (cx, cy), ring, 1)
         spr = art.pet_sprite(3 + self.stage, not self.facing_right, self.color)
         screen.blit(spr, (cx - spr.get_width() // 2, cy - spr.get_height() // 2))
+        if self.stage >= 1:
+            tail_y = cy + spr.get_height() // 4
+            for i in range(3):
+                px = int(cx - (8 + i * 5) * (-1 if self.facing_right else 1))
+                py = int(tail_y + math.sin(self.anim * 0.1 + i) * 3)
+                pygame.draw.line(screen, art._light(self.color, 0.35), (cx, cy + 1), (px, py), 1)
         if self.stage >= 3:
             art.draw_crown(screen, cx, cy - spr.get_height() // 2 - 6, self.anim * 0.05)
         if self.heal_flash > 0:
@@ -1665,6 +1891,8 @@ class Enemy:
         self.dash_vx = self.dash_vy = 0
         self.is_summon = False
         self.summoner = None
+        self.support_kind = None
+        self.support_cd = random.randint(20, 80)
 
     # ---------------- 战斗 ----------------
     def _deal_melee(self, level, player):
@@ -1677,6 +1905,18 @@ class Enemy:
         if dmg > 0:
             level.pop_player_damage(dmg, self.dmg_type)
             level.shake = max(level.shake, 4)
+            if self.is_summon and self.support_kind == "chill":
+                resist = player.status_resist("ocean")
+                player.chill_timer = max(player.chill_timer, int(80 * (1 - resist)))
+            elif self.is_summon and self.support_kind == "freeze":
+                resist = player.status_resist("ocean")
+                player.freeze(max(10, int(22 * (1 - resist))))
+                player.chill_timer = max(player.chill_timer, int(110 * (1 - resist)))
+
+    def heal(self, amount):
+        before = self.hp
+        self.hp = min(self.max_hp, self.hp + amount)
+        return self.hp - before
 
     def _fire_bolts(self, level, player, count=1, spread=0.16, speed=7.0, kind=None):
         dx = player.rect.centerx - self.rect.centerx
@@ -1699,6 +1939,47 @@ class Enemy:
                 self.cast_timer = 26
                 return True
         return False
+
+    def _update_summon_support(self, level, player):
+        if not self.is_summon or self.summoner is None or player is None or level is None:
+            return
+        if self.summoner.dead or self.summoner not in level.enemies:
+            return
+        self.support_cd = max(0, self.support_cd - 1)
+        boss = self.summoner
+        dist_boss = math.hypot(boss.rect.centerx - self.rect.centerx, boss.rect.centery - self.rect.centery)
+        dist_player = math.hypot(player.rect.centerx - self.rect.centerx, player.rect.centery - self.rect.centery)
+        if self.support_kind == "regen" and self.support_cd == 0 and dist_boss < 210:
+            healed = boss.heal(max(10, int(boss.max_hp * 0.018)))
+            if healed > 0:
+                level.effects.append(SparkBurst(boss.rect.centerx, boss.rect.top + 10,
+                                                (140, 255, 180), 10, 2.2, 16, 3, -0.12))
+                level.float_texts.append(FloatText(boss.rect.centerx, boss.rect.top - 14,
+                                                   f"+{healed}", (150, 255, 190), 16, 40))
+            self.support_cd = 52
+        elif self.support_kind == "rage" and dist_boss < 220:
+            boss.summon_attack_buff_timer = max(getattr(boss, "summon_attack_buff_timer", 0), 18)
+            if self.support_cd == 0:
+                level.effects.append(SparkBurst(boss.rect.centerx, boss.rect.centery - 8,
+                                                (255, 150, 120), 8, 2.0, 14, 3, -0.1))
+                self.support_cd = 42
+        elif self.support_kind == "chill" and self.support_cd == 0 and dist_player < 150 and player.z < 18:
+            resist = player.status_resist("ocean")
+            player.chill_timer = max(player.chill_timer, int(125 * (1 - resist)))
+            level.effects.append(FrostShards(player.rect.centerx, player.rect.centery, 46, life=20, count=10))
+            level.float_texts.append(FloatText(player.rect.centerx, player.rect.top - 20,
+                                               "迟缓！", (150, 220, 255), 15, 40))
+            self.support_cd = 78
+        elif self.support_kind == "freeze" and self.support_cd == 0 and dist_player < 120 and player.z < 18:
+            resist = player.status_resist("ocean")
+            boss.summon_frost_buff_timer = max(getattr(boss, "summon_frost_buff_timer", 0), 24)
+            player.freeze(max(14, int(28 * (1 - resist))))
+            player.chill_timer = max(player.chill_timer, int(150 * (1 - resist)))
+            level.effects.append(BossSkillFX("ice_nova", self.rect.centerx, self.rect.centery,
+                                             70, (150, 220, 255), 18))
+            level.float_texts.append(FloatText(player.rect.centerx, player.rect.top - 22,
+                                               "冻结！", (170, 230, 255), 16, 44))
+            self.support_cd = 110
 
     def _release_skill(self, level, player):
         if player is None:
@@ -1743,6 +2024,9 @@ class Enemy:
 
         if self._update_skill_timers(level, player):
             return
+
+        if self.is_summon:
+            self._update_summon_support(level, player)
 
         is_knockback = abs(self.knockback_x) > 1 or abs(self.knockback_y) > 1
         move_x = move_y = 0
@@ -1868,7 +2152,10 @@ class Enemy:
                           int(self.rect.width * 0.8), (190, 130, 255), 45)
             pygame.draw.ellipse(screen, (196, 140, 255),
                                 (dx + 2, dy + self.rect.height - 8, self.rect.width - 4, 8), 2)
-            tag = art.label("召", (220, 180, 255), 10, True)
+            tags = {"regen": ("愈", (150, 255, 180)), "rage": ("怒", (255, 164, 128)),
+                    "chill": ("缓", (150, 220, 255)), "freeze": ("冻", (188, 235, 255))}
+            glyph, gcol = tags.get(self.support_kind, ("召", (220, 180, 255)))
+            tag = art.label(glyph, gcol, 10, True)
             screen.blit(tag, (dx + self.rect.width // 2 - tag.get_width() // 2,
                               dy - 20))
 
@@ -1935,6 +2222,7 @@ class Boss(Enemy):
         self.aggro = 720
         self.chase = True
         self.attack_damage = 20 + level_idx * 5.5
+        self.base_attack_damage = self.attack_damage
         self.melee_interval = 60
         self.skill_cd = 90
         self.pending_skill = None
@@ -1942,9 +2230,21 @@ class Boss(Enemy):
         self.name = self.NAMES.get(boss_type, "首领")
         self.weapon_kind = {"skeleton": "sword", "tree": "club",
                             "golem": "hammer", "mushroom": "staff"}.get(boss_type)
+        self.summon_count = 0
+        self.summon_attack_buff_timer = 0
+        self.summon_frost_buff_timer = 0
+        self.support_index = 0
 
     def freeze(self, frames):
         super().freeze(max(20, frames // 2))     # BOSS 抗冻
+
+    def update(self, walls, player=None, level=None):
+        if self.summon_attack_buff_timer > 0:
+            self.summon_attack_buff_timer -= 1
+        if self.summon_frost_buff_timer > 0:
+            self.summon_frost_buff_timer -= 1
+        self.attack_damage = self.base_attack_damage * (1.28 if self.summon_attack_buff_timer > 0 else 1.0)
+        super().update(walls, player, level)
 
     def _update_skill_timers(self, level, player):
         if player is None or level is None:
@@ -2002,8 +2302,7 @@ class Boss(Enemy):
                     level.pop_player_damage(dmg, DMG_PHYS)
 
         elif skill == "summon":
-            alive = sum(1 for e in level.enemies if e.summoner is self)
-            if alive >= 6:
+            if self.summon_count >= 6:
                 return
             minion = self.MINIONS.get(self.enemy_type, "slime")
             level.float_texts.append(FloatText(cx, cy - self.rect.height, "召唤！",
@@ -2011,6 +2310,7 @@ class Boss(Enemy):
             level.shake = max(level.shake, 6)
             level.effects.append(BossSkillFX("summon", cx, cy, 90, (200, 140, 255), 34))
             audio.play("boss_roar", 0.7)
+            support_cycle = ("regen", "rage", "chill", "freeze")
             for _ in range(3):
                 ang = random.uniform(0, math.tau)
                 mx = cx + math.cos(ang) * random.randint(60, 110)
@@ -2018,9 +2318,13 @@ class Boss(Enemy):
                 spawned = Enemy(mx, my, minion, False, self.level_idx)
                 spawned.is_summon = True
                 spawned.summoner = self
+                spawned.support_kind = support_cycle[self.support_index % len(support_cycle)]
+                spawned.support_cd = 24
+                self.support_index += 1
                 spawned.hp = int(spawned.max_hp * 0.7)
                 spawned.max_hp = spawned.hp
                 level.enemies.append(spawned)
+                self.summon_count += 1
                 level.effects.append(Shockwave(mx, my, 44, (200, 140, 255), 18, 4, 0.4))
 
         elif skill == "spore_ring":
@@ -2082,12 +2386,37 @@ class Boss(Enemy):
         art.blit_glow(screen, dx + self.rect.width // 2, dy + self.rect.height // 2,
                       self.rect.width if not variant else int(self.rect.width * 1.2),
                       aura, 40)
+        if self.summon_attack_buff_timer > 0:
+            art.blit_glow(screen, dx + self.rect.width // 2, dy + self.rect.height // 2,
+                          64, (255, 150, 120), 36)
+        if self.summon_frost_buff_timer > 0:
+            art.blit_glow(screen, dx + self.rect.width // 2, dy + self.rect.height // 2,
+                          56, (150, 220, 255), 32)
 
         facing_right = self.direction >= 0
+        chapter = chapter_of(self.level_idx)
+        wing_color = {
+            0: (188, 240, 198),
+            1: (150, 224, 255),
+            2: (232, 236, 255),
+            3: (255, 170, 118),
+        }.get(chapter, (225, 235, 255))
+        weapon_color = {
+            0: (196, 236, 164),
+            1: (166, 226, 255),
+            2: (236, 236, 255),
+            3: (255, 188, 132),
+        }.get(chapter, (214, 218, 230))
+        if variant == 1:
+            weapon_color = (255, 150, 130)
+        elif variant == 2:
+            weapon_color = (190, 150, 255)
+        elif variant >= 3:
+            weapon_color = (132, 118, 196)
         # 天空大关的 BOSS 有翅膀
-        if chapter_of(self.level_idx) == 2:
+        if chapter == 2:
             art.draw_wings(screen, dx + self.rect.width // 2, dy + self.rect.height // 2,
-                           (225, 235, 255), self.anim * 0.12)
+                           wing_color, self.anim * 0.12)
 
         spr = art.boss_sprite(self.enemy_type, self.level_idx, not facing_right,
                               getattr(self, "variant", 0))
@@ -2113,15 +2442,13 @@ class Boss(Enemy):
                 swing = 1.0 - self.cast_timer / 34.0
             hx = dx + (self.rect.width - 10 if facing_right else 10)
             hy = dy + self.rect.height * 0.52
-            art.draw_boss_weapon(screen, hx, hy, self.weapon_kind, facing_right, swing)
+            art.draw_boss_weapon(screen, hx, hy, self.weapon_kind, facing_right, swing, weapon_color)
 
         if self.cast_timer > 0:
             # 技能蓄力预警圈
             t = 1 - self.cast_timer / 34
             r = int(90 + 60 * t)
-            surf = pygame.Surface((r * 2 + 8, r * 2 + 8), pygame.SRCALPHA)
-            pygame.draw.circle(surf, (255, 90, 60, 120), (r + 4, r + 4), r, 4)
-            pygame.draw.circle(surf, (255, 220, 120, 60), (r + 4, r + 4), int(r * t), 3)
+            surf = _boss_warn_surface(r)
             screen.blit(surf, (dx + self.rect.width // 2 - r - 4,
                                dy + self.rect.height // 2 - r - 4))
 
@@ -2142,9 +2469,49 @@ class Item:
         self.collected = False
         self.age = random.randint(0, 40)
         self.phase = random.random() * math.tau
+        self.vx = random.uniform(-1.8, 1.8)
+        self.vy = random.uniform(-2.4, -0.8)
+        self.air_timer = 20
 
-    def update_physics(self):
+    def _nudge_from_blockers(self, blockers):
+        if not blockers:
+            return
+        for _ in range(4):
+            pushed = False
+            for wall in blockers:
+                if not self.rect.colliderect(wall):
+                    continue
+                ox = min(self.rect.right - wall.left, wall.right - self.rect.left)
+                oy = min(self.rect.bottom - wall.top, wall.bottom - self.rect.top)
+                if ox < oy:
+                    if self.rect.centerx < wall.centerx:
+                        self.rect.right = wall.left
+                    else:
+                        self.rect.left = wall.right
+                    self.vx *= -0.22
+                else:
+                    if self.rect.centery < wall.centery:
+                        self.rect.bottom = wall.top
+                    else:
+                        self.rect.top = wall.bottom
+                    self.vy *= -0.18
+                pushed = True
+            if not pushed:
+                break
+
+    def update_physics(self, blockers=None):
         self.age += 1
+        if self.air_timer > 0 or abs(self.vx) > 0.08 or abs(self.vy) > 0.08:
+            self.air_timer = max(0, self.air_timer - 1)
+            self.vy = min(2.6, self.vy + 0.18)
+            self.rect.x += int(round(self.vx))
+            self._nudge_from_blockers(blockers)
+            self.rect.y += int(round(self.vy))
+            self._nudge_from_blockers(blockers)
+            self.vx *= 0.82
+            self.vy *= 0.72
+        else:
+            self._nudge_from_blockers(blockers)
 
     def display_name(self):
         gear = GEAR_SETS.get(self.set_key, GEAR_SETS["forest"])
@@ -2171,7 +2538,7 @@ class Item:
         if self.hidden:
             art.blit_glow(screen, x + box // 2, y + box // 2, box, (255, 190, 90), 80)
         art.draw_item_icon(screen, x, y, self.type, self.quality, self.weapon_type,
-                           self.age * 0.08, set_color=set_color)
+                           self.age * 0.08, set_color=set_color, set_key=self.set_key)
 
         name = self.display_name()
         if name:

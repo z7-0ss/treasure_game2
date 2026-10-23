@@ -30,6 +30,15 @@ _music_channel = None
 _music_switch_at = 0.0
 _music_on = True
 _sfx_on = True
+_sfx_last_played = {}
+_SFX_COOLDOWN_MS = {
+    "boss_roar": 180,
+    "boss_skill": 90,
+    "boom": 45,
+    "hit_magic": 35,
+    "hit_phys": 25,
+    "hit": 25,
+}
 
 _NOTE_BASE = {"C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5, "F#": 6,
               "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11}
@@ -569,6 +578,13 @@ def play(name, volume=1.0):
     sound = _sfx.get(name)
     if sound is None:
         return
+    cooldown = _SFX_COOLDOWN_MS.get(name, 0)
+    if cooldown > 0:
+        now = pygame.time.get_ticks()
+        last = _sfx_last_played.get(name, -10 ** 9)
+        if now - last < cooldown:
+            return
+        _sfx_last_played[name] = now
     try:
         sound.set_volume(min(1.0, _sfx_volume * volume))
         if sound.play() is None:
@@ -650,3 +666,16 @@ def ensure_music():
                 _music_channel.play(track, loops=-1)
     except pygame.error:
         pass
+
+
+def prewarm_music(*names):
+    """提前合成高频曲目，避免首次切换时卡顿。"""
+    if not _ready:
+        return
+    for name in names:
+        if not name or name in _music:
+            continue
+        try:
+            _music[name] = _build_track(name)
+        except Exception:
+            continue
