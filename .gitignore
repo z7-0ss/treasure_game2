@@ -15,3 +15,4 @@ prefs.json
 
 *.apk
 *_web.zip
+!android/app/src/main/assets/www/build_web.apk
