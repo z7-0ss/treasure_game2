@@ -28,7 +28,7 @@ _sfx_volume = 0.9
 _music_volume = 0.55
 _music_channel = None
 _music_switch_at = 0.0
-_music_on = True
+_music_on = False
 _sfx_on = True
 _sfx_last_played = {}
 _SFX_COOLDOWN_MS = {
@@ -501,7 +501,7 @@ def status():
     if _ready:
         got = pygame.mixer.get_init()
         rate = got[0] if got else SR
-        return f"音频 {rate // 1000}kHz · OK"
+        return f"音效 {rate // 1000}kHz · 背景音乐已关闭"
     return f"音频不可用：{_error or '未知原因'}"
 
 
@@ -510,53 +510,18 @@ def available():
 
 
 def play_music(name="menu", force=False):
-    """切换背景音乐：独占声道 + 去抖，避免来回切换造成断续。"""
+    """背景音乐默认关闭，只记录状态并确保不会残留播放。"""
     global _music_playing, _music_current, _music_switch_at
+    _music_current = name
+    _music_playing = None
     if not _ready:
         return
-    if not _music_on:
-        _music_current = name          # 记住位置，重新打开时从这里继续
-        try:
-            if _music_channel is not None:
-                _music_channel.stop()
-        except pygame.error:
-            pass
-        _music_playing = None
-        return
-    now = pygame.time.get_ticks() / 1000.0
-
-    if name == _music_current and _music_playing is not None:
-        try:
-            if _music_playing.get_num_channels() > 0:
-                return
-        except pygame.error:
-            pass
-
-    # 1.2 秒内不重复切换（除非显式 force），防止在 BOSS 范围边缘抖动
-    if (not force and _music_current is not None
-            and now - _music_switch_at < 1.2):
-        return
-
-    track = _music.get(name)
-    if track is None:
-        try:
-            track = _build_track(name)
-        except Exception:
-            return
-        _music[name] = track
-
     try:
-        ch = _music_channel
-        if ch is None:
-            ch = pygame.mixer.Channel(0)
-        ch.fadeout(260)
-        track.set_volume(_music_volume)
-        ch.play(track, loops=-1, fade_ms=260)
-        _music_playing = track
-        _music_current = name
-        _music_switch_at = now
+        if _music_channel is not None:
+            _music_channel.stop()
     except pygame.error:
         pass
+    _music_switch_at = pygame.time.get_ticks() / 1000.0
 
 
 def stop_music():
@@ -626,27 +591,21 @@ def music_name():
 
 
 def music_enabled():
-    return _music_on
+    return False
 
 
 def sfx_enabled():
     return _sfx_on
 
 
-def set_music_enabled(on):
+def set_music_enabled(_on):
     global _music_on
-    _music_on = bool(on)
-    if not _music_on:
-        try:
-            if _music_channel is not None:
-                _music_channel.fadeout(200)
-        except pygame.error:
-            pass
-        return
-    name = _music_current or "menu"
-    global _music_switch_at
-    _music_switch_at = -10.0
-    play_music(name, force=True)
+    _music_on = False
+    try:
+        if _music_channel is not None:
+            _music_channel.fadeout(120)
+    except pygame.error:
+        pass
 
 
 def set_sfx_enabled(on):
@@ -655,27 +614,8 @@ def set_sfx_enabled(on):
 
 
 def ensure_music():
-    """音乐若意外停了（设备切换/丢帧），自动续上。"""
-    if not _ready or not _music_on or _music_current is None:
-        return
-    try:
-        if _music_channel is not None and not _music_channel.get_busy():
-            track = _music.get(_music_current)
-            if track is not None:
-                track.set_volume(_music_volume)
-                _music_channel.play(track, loops=-1)
-    except pygame.error:
-        pass
+    return
 
 
-def prewarm_music(*names):
-    """提前合成高频曲目，避免首次切换时卡顿。"""
-    if not _ready:
-        return
-    for name in names:
-        if not name or name in _music:
-            continue
-        try:
-            _music[name] = _build_track(name)
-        except Exception:
-            continue
+def prewarm_music(*_names):
+    return

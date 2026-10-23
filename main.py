@@ -892,11 +892,10 @@ async def main():
     pygame.init()
     audio.init()
     prefs = save.load_prefs()
-    if prefs.get("music") is False:
-        audio.set_music_enabled(False)
+    audio.set_music_enabled(False)
     if prefs.get("sfx") is False:
         audio.set_sfx_enabled(False)
-    audio.prewarm_music("boss", "victory")
+    save.save_prefs({"music": False, "sfx": audio.sfx_enabled()})
     audio.play_music("menu")
     screen = None
     is_fullscreen = False
@@ -993,7 +992,6 @@ async def main():
     chapter_tabs = [pygame.Rect(60 + i * 216, 108, 204, 40) for i in range(len(CHAPTERS))]
     continue_btn = pygame.Rect(WIDTH // 2 - 248, 438, 496, 62)
     fs_btn = pygame.Rect(WIDTH - 152, 14, 134, 34)
-    music_btn = pygame.Rect(WIDTH - 412, 14, 124, 34)
     sfx_btn = pygame.Rect(WIDTH - 282, 14, 124, 34)
     slot_tabs = [pygame.Rect(12 + i * 166, 10, 160, 46) for i in range(save.SLOT_COUNT)]
     quit_btn = pygame.Rect(WIDTH - 172, HEIGHT - 62, 160, 40)
@@ -1235,12 +1233,6 @@ async def main():
                                 pass
                         else:
                             running = False
-                    if music_btn.collidepoint(event.pos):
-                        audio.set_music_enabled(not audio.music_enabled())
-                        save.save_prefs({"music": audio.music_enabled(),
-                                         "sfx": audio.sfx_enabled()})
-                        toast_text = "音乐已开启" if audio.music_enabled() else "音乐已关闭"
-                        toast_timer = 90
                     if sfx_btn.collidepoint(event.pos):
                         audio.set_sfx_enabled(not audio.sfx_enabled())
                         save.save_prefs({"music": audio.music_enabled(),
@@ -1528,23 +1520,21 @@ async def main():
                 screen.blit(fs_label, (fs_btn.centerx - fs_label.get_width() // 2,
                                        fs_btn.centery - fs_label.get_height() // 2))
 
-            # 音频状态 + 音乐/音效开关
-            st_color = (150, 255, 190) if audio.available() else (255, 160, 160)
-            screen.blit(small_font.render(audio.status() + "   v1.1", True, st_color), (14, HEIGHT - 24))
-            for btn, on, on_text, off_text in (
-                    (music_btn, audio.music_enabled(), "音乐 开", "音乐 关"),
-                    (sfx_btn, audio.sfx_enabled(), "音效 开", "音效 关")):
-                hover = btn.collidepoint(mouse_pos)
-                accent = (150, 255, 190) if on else (150, 120, 130)
-                art.panel(screen, btn, accent=accent,
-                          fill=(26, 40, 34) if on else (36, 26, 32), alpha=228, radius=8)
-                if hover:
-                    pygame.draw.rect(screen, (255, 240, 250), btn.inflate(4, 4), 1,
-                                     border_radius=10)
-                label = small_font.render(on_text if on else off_text, True,
-                                          (200, 255, 226) if on else (230, 190, 196))
-                screen.blit(label, (btn.centerx - label.get_width() // 2,
-                                    btn.centery - label.get_height() // 2))
+            # 音效开关（音乐没有界面文字）
+            ver = small_font.render("v1.2", True, (86, 80, 100))
+            screen.blit(ver, (WIDTH - ver.get_width() - 8, HEIGHT - ver.get_height() - 4))
+            btn, on = sfx_btn, audio.sfx_enabled()
+            hover = btn.collidepoint(mouse_pos)
+            accent = (150, 255, 190) if on else (150, 120, 130)
+            art.panel(screen, btn, accent=accent,
+                      fill=(26, 40, 34) if on else (36, 26, 32), alpha=228, radius=8)
+            if hover:
+                pygame.draw.rect(screen, (255, 240, 250), btn.inflate(4, 4), 1,
+                                 border_radius=10)
+            label = small_font.render("音效 开" if on else "音效 关", True,
+                                      (200, 255, 226) if on else (230, 190, 196))
+            screen.blit(label, (btn.centerx - label.get_width() // 2,
+                                btn.centery - label.get_height() // 2))
 
             has_progress = bool(progress.get("player")) or bool(progress.get("cleared"))
             if has_progress:

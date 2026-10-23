@@ -1245,24 +1245,42 @@ class Level:
 
         elif kind == "wave":
             damage = max(1, int(base * skill["mult"]))
-            shot_x, shot_y = self.player._shot_unit(0.5)
+            target = self.player.pick_target(self, 760)
+            shot_x, shot_y = self.player._shot_unit(0.08)
+            if target is not None:
+                self.player.set_aim_towards(target.rect.centerx, target.rect.centery, lock=30)
+                dist = math.hypot(target.rect.centerx - self.player.rect.centerx,
+                                  target.rect.centery - self.player.rect.centery)
+                if dist > 1.0:
+                    shot_x = (target.rect.centerx - self.player.rect.centerx) / dist
+                    shot_y = (target.rect.centery - self.player.rect.centery) / dist
             direction = 1 if shot_x >= 0 else -1
             px = self.player.rect.right if direction > 0 else self.player.rect.left - 40
             wave = Projectile(px, self.player.rect.centery - 20, direction, damage, "wave",
                               max_dist=460, pierce=99, tint=skill["color"],
-                              vy=shot_y * 11, vx=shot_x * 11)
+                              vy=shot_y * 11, vx=shot_x * 11, target=target,
+                              homing=0.1 if target is not None else 0.0, hit_pad=16)
             wave.rect.height = 44
             self.player.projectiles.append(wave)
             self.shake = 4
 
         elif kind == "blast":
             damage = max(1, int(base * skill["mult"]))
-            shot_x, shot_y = self.player._shot_unit(0.55)
+            target = self.player.pick_target(self, 760)
+            shot_x, shot_y = self.player._shot_unit(0.12)
+            if target is not None:
+                self.player.set_aim_towards(target.rect.centerx, target.rect.centery, lock=30)
+                dist = math.hypot(target.rect.centerx - self.player.rect.centerx,
+                                  target.rect.centery - self.player.rect.centery)
+                if dist > 1.0:
+                    shot_x = (target.rect.centerx - self.player.rect.centerx) / dist
+                    shot_y = (target.rect.centery - self.player.rect.centery) / dist
             direction = 1 if shot_x >= 0 else -1
             px = self.player.rect.right if direction > 0 else self.player.rect.left - 18
             arrow = Projectile(px, self.player.rect.centery - 6, direction, damage, "arrow",
                                max_dist=420, pierce=1, tint=(255, 190, 140),
-                               vy=shot_y * 11, vx=shot_x * 11)
+                               vy=shot_y * 12, vx=shot_x * 12, target=target,
+                               homing=0.14 if target is not None else 0.0, hit_pad=10)
             arrow.explode_radius = skill["radius"]
             self.player.projectiles.append(arrow)
             self.shake = 3
@@ -1567,8 +1585,9 @@ class Level:
         for p in self.player.projectiles:
             if p.dead:
                 continue
+            hit_rect = p.hit_rect()
             for crate in self.crates[:]:
-                if p.rect.colliderect(crate["rect"]):
+                if hit_rect.colliderect(crate["rect"]):
                     self._hit_crate(crate, p.damage)
                     p.dead = True
                     break
@@ -1577,12 +1596,13 @@ class Level:
         for p in self.player.projectiles:
             if p.dead:
                 continue
+            hit_rect = p.hit_rect()
             for enemy in self.enemies[:]:
                 if p.dead:
                     break
                 if id(enemy) in p.hits:
                     continue
-                if p.rect.colliderect(enemy.rect):
+                if hit_rect.colliderect(enemy.rect):
                     p.hits.add(id(enemy))
                     crit = random.random() < self.player.crit_chance
                     dmg = p.damage * (self.player.CRIT_MULT if crit else 1)

@@ -61,7 +61,8 @@ def _boss_warn_surface(radius):
 # --------------------------------------------------------------------------
 class Projectile:
     def __init__(self, x, y, direction, damage, type_name, max_dist=300,
-                 vy=0.0, pierce=1, tint=None, vx=None):
+                 vy=0.0, pierce=1, tint=None, vx=None, target=None,
+                 homing=0.0, hit_pad=0):
         self.type = type_name
         self.p_type = type_name
         self.direction = 1 if direction >= 0 else -1
@@ -74,6 +75,9 @@ class Projectile:
         base_speed = 11 if type_name != "magic" else 9
         self.vx = float(vx) if vx is not None else self.direction * base_speed
         self.vy = float(vy)
+        self.target = target
+        self.homing = homing
+        self.hit_pad = hit_pad
         if abs(self.vx) < 0.01:
             self.vx = self.direction * max(1.0, base_speed * 0.35)
         self.direction = 1 if self.vx >= 0 else -1
@@ -82,9 +86,36 @@ class Projectile:
         self.y = float(y)
         self.start_x, self.start_y = self.x, self.y
         self.dead = False
-        self.rect = pygame.Rect(int(self.x), int(self.y), 18, 10)
+        if type_name == "magic":
+            self.rect = pygame.Rect(int(self.x), int(self.y), 22, 22)
+            self.hit_pad = max(self.hit_pad, 10)
+        elif type_name == "wave":
+            self.rect = pygame.Rect(int(self.x), int(self.y), 34, 44)
+            self.hit_pad = max(self.hit_pad, 16)
+        else:
+            self.rect = pygame.Rect(int(self.x), int(self.y), 22, 12)
+            self.hit_pad = max(self.hit_pad, 6)
+
+    def hit_rect(self):
+        return self.rect.inflate(self.hit_pad * 2, self.hit_pad * 2)
+
+    def _home_towards_target(self):
+        if self.homing <= 0 or self.target is None or getattr(self.target, "dead", False):
+            return
+        tx = self.target.rect.centerx - self.rect.centerx
+        ty = self.target.rect.centery - self.rect.centery
+        dist = math.hypot(tx, ty)
+        if dist <= 1.0:
+            return
+        desired_vx = tx / dist * self.speed
+        desired_vy = ty / dist * self.speed
+        blend = max(0.0, min(0.45, self.homing))
+        self.vx = self.vx * (1.0 - blend) + desired_vx * blend
+        self.vy = self.vy * (1.0 - blend) + desired_vy * blend
+        self.direction = 1 if self.vx >= 0 else -1
 
     def update(self, walls):
+        self._home_towards_target()
         self.x += self.vx
         self.y += self.vy
         self.rect.x = int(self.x)
@@ -1143,14 +1174,28 @@ class Player:
         if level is None:
             return None
         best = None
-        best_dist = radius
+        best_score = 10 ** 9
         px, py = self.rect.center
+        aim_bias = self.aim_lock_timer > 0 or abs(self.aim_dy) > 0.18
         for enemy in level.enemies:
             if enemy.dead:
                 continue
-            dist = math.hypot(enemy.rect.centerx - px, enemy.rect.centery - py)
-            if dist < best_dist:
-                best_dist = dist
+            dx = enemy.rect.centerx - px
+            dy = enemy.rect.centery - py
+            dist = math.hypot(dx, dy)
+            if dist > radius:
+                continue
+            if not aim_bias:
+                score = dist
+            else:
+                ndx, ndy = dx / max(1.0, dist), dy / max(1.0, dist)
+                align = ndx * self.aim_dx + ndy * self.aim_dy
+                front_bonus = max(0.0, align) * 110.0
+                rear_penalty = 90.0 if align < -0.2 else 0.0
+                vertical_penalty = abs(dy) * 0.08
+                score = dist + vertical_penalty + rear_penalty - front_bonus
+            if score < best_score:
+                best_score = score
                 best = enemy
         return best
 
@@ -1229,32 +1274,44 @@ class Player:
         elif self.weapon_type == WEAPON_BOW:
             direction = self.aim_sign()
             self.attack_timer = 10
-            self.attack_cooldown = int(22 * haste)
-            self.spawn_projectile("arrow")
+            self.attack_cooldown = int(18 * haste)
+            self.spawn_projectile("arrow", self.pick_target(level, 640))
             audio.play("shot")
             self.fx_queue.append(("shot", self.rect.centerx + 18 * direction,
                                   self.rect.centery - 2, direction))
         elif self.weapon_type == WEAPON_STAFF:
             self.auto_aim(level, 620)
             self.attack_timer = 15
-            self.attack_cooldown = int(34 * haste)
-            self.spawn_projectile("magic")
+            self.attack_cooldown = int(28 * haste)
+            self.spawn_projectile("magic", self.pick_target(level, 700))
             audio.play("spell")
             self.fx_queue.append(("cast_magic", self.rect.centerx, self.rect.bottom - 2,
                                   self.aim_sign()))
 
         self.energy = min(MAX_ENERGY, self.energy + 15 + (8 if self.has_hidden("mana") else 0))
 
-    def spawn_projectile(self, p_type):
-        speed = 11 if p_type != "magic" else 9
-        shot_x, shot_y = self._shot_unit(0.42 if p_type == "magic" else 0.5)
+    def spawn_projectile(self, p_type, target=None):
+        speed = 13 if p_type == "arrow" else (10 if p_type == "magic" else 11)
+        shot_x, shot_y = self._shot_unit(0.1 if p_type == "magic" else 0.14)
+        if target is not None:
+            tx = target.rect.centerx - self.rect.centerx
+            ty = target.rect.centery - self.rect.centery
+            dist = math.hypot(tx, ty)
+            if dist > 1.0:
+                shot_x = tx / dist
+                shot_y = ty / dist
+                self.set_aim_vector(shot_x, shot_y, lock=28)
         direction = 1 if shot_x >= 0 else -1
         proj_x = self.rect.right if direction > 0 else self.rect.left - 16
         proj_y = self.rect.centery - 4 + int(shot_y * 8)
         max_dist = (300 if p_type == "arrow" else 250) + (self.level - 1) * 40
+        homing = 0.12 if (p_type == "arrow" and target is not None) else 0.0
+        if p_type == "magic":
+            homing = 0.24 if target is not None else 0.14
         self.projectiles.append(Projectile(
             proj_x, proj_y, direction, self.get_damage(), p_type, max_dist,
-            vy=shot_y * speed, vx=shot_x * speed))
+            vy=shot_y * speed, vx=shot_x * speed, target=target,
+            homing=homing, hit_pad=10 if p_type == "magic" else 6))
 
     def try_skill(self, slot=0):
         cost = self.skill_cost(slot)
@@ -1270,7 +1327,7 @@ class Player:
 
     def spawn_volley(self, count, damage, spread=0.34):
         speed = 11
-        base_x_dir, base_y_dir = self._shot_unit(0.55)
+        base_x_dir, base_y_dir = self._shot_unit(0.14)
         perp_x, perp_y = -base_y_dir, base_x_dir
         for i in range(count):
             offset = i - (count - 1) / 2
