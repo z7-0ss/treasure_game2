@@ -26,6 +26,10 @@ import pathlib
 p = pathlib.Path("build_web/build/web/index.html")
 t = p.read_text(encoding="utf-8")
 t = t.replace("<title>build_web</title>", "<title>解密·四界征战</title>")
+t = t.replace(
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <meta name="viewport" content="height=device-height, initial-scale=1.0">',
+    '<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">'
+)
 # 保持原始的 tar.gz 归档分支不动
 # 运行时改成本地文件（离线包）
 t = t.replace("https://pygame-web.github.io/cdn/0.9.3/", "./runtime/")
@@ -64,6 +68,29 @@ t = t.replace(
 """    platform.window.infobox.style.display = "none"
     platform.window.__bootDone = true
     platform.window.config.gui_divider = 1
+""")
+t = t.replace(
+"""        body {
+            font-family: arial;
+            margin: 0;
+            padding: none;
+            background-color:powderblue;
+        }
+""",
+"""        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #07060d;
+            touch-action: none;
+        }
+
+        body {
+            font-family: arial;
+            background-color:#07060d;
+        }
 """)
 p.write_text(t, encoding="utf-8")
 print("cdn refs left:", t.count("pygame-web.github.io"))
