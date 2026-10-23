@@ -92,6 +92,62 @@ t = t.replace(
             background-color:#07060d;
         }
 """)
+t = t.replace(
+"""    function frame_online(url) {
+        window.frames["iframe"].location = url;
+    }
+""",
+"""    function frame_online(url) {
+        window.frames["iframe"].location = url;
+    }
+
+    function enforce_fullscreen_canvas() {
+        const root = document.documentElement;
+        const body = document.body;
+        const canvases = [document.getElementById("canvas"), document.getElementById("canvas3d")];
+        if (root) {
+            root.style.width = "100%";
+            root.style.height = "100%";
+            root.style.overflow = "hidden";
+        }
+        if (body) {
+            body.style.width = "100%";
+            body.style.height = "100%";
+            body.style.overflow = "hidden";
+        }
+        for (const canvas of canvases) {
+            if (!canvas) {
+                continue;
+            }
+            canvas.style.position = "fixed";
+            canvas.style.inset = "0";
+            canvas.style.width = "100vw";
+            canvas.style.height = "100vh";
+            canvas.style.maxWidth = "100vw";
+            canvas.style.maxHeight = "100vh";
+        }
+        if (typeof window_resize === "function") {
+            window_resize();
+        }
+    }
+
+    function refresh_fullscreen_canvas() {
+        enforce_fullscreen_canvas();
+        requestAnimationFrame(() => {
+            enforce_fullscreen_canvas();
+            setTimeout(enforce_fullscreen_canvas, 80);
+        });
+    }
+
+    for (const evt of ["load", "resize", "orientationchange", "pageshow", "focus", "fullscreenchange"]) {
+        window.addEventListener(evt, refresh_fullscreen_canvas);
+    }
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+            refresh_fullscreen_canvas();
+        }
+    });
+""")
 p.write_text(t, encoding="utf-8")
 print("cdn refs left:", t.count("pygame-web.github.io"))
 PY

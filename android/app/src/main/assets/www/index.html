@@ -227,8 +227,7 @@ function show_infobox() {
     <title>解密·四界征战</title>
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="viewport" content="height=device-height, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes"/>
 
@@ -282,11 +281,19 @@ function show_infobox() {
             right: 0;
         }
 
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #07060d;
+            touch-action: none;
+        }
+
         body {
             font-family: arial;
-            margin: 0;
-            padding: none;
-            background-color:powderblue;
+            background-color:#07060d;
         }
 
         .topright{
@@ -477,6 +484,53 @@ frameborder="1"
     function frame_online(url) {
         window.frames["iframe"].location = url;
     }
+
+    function enforce_fullscreen_canvas() {
+        const root = document.documentElement;
+        const body = document.body;
+        const canvases = [document.getElementById("canvas"), document.getElementById("canvas3d")];
+        if (root) {
+            root.style.width = "100%";
+            root.style.height = "100%";
+            root.style.overflow = "hidden";
+        }
+        if (body) {
+            body.style.width = "100%";
+            body.style.height = "100%";
+            body.style.overflow = "hidden";
+        }
+        for (const canvas of canvases) {
+            if (!canvas) {
+                continue;
+            }
+            canvas.style.position = "fixed";
+            canvas.style.inset = "0";
+            canvas.style.width = "100vw";
+            canvas.style.height = "100vh";
+            canvas.style.maxWidth = "100vw";
+            canvas.style.maxHeight = "100vh";
+        }
+        if (typeof window_resize === "function") {
+            window_resize();
+        }
+    }
+
+    function refresh_fullscreen_canvas() {
+        enforce_fullscreen_canvas();
+        requestAnimationFrame(() => {
+            enforce_fullscreen_canvas();
+            setTimeout(enforce_fullscreen_canvas, 80);
+        });
+    }
+
+    for (const evt of ["load", "resize", "orientationchange", "pageshow", "focus", "fullscreenchange"]) {
+        window.addEventListener(evt, refresh_fullscreen_canvas);
+    }
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+            refresh_fullscreen_canvas();
+        }
+    });
 
     </script>
 
