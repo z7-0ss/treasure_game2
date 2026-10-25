@@ -1,10 +1,13 @@
 # main.py
 import pygame, sys, asyncio, math, random
+import settings as settings_mod
 from settings import *
+import level as level_mod
 from level import Level, generate_map
 import art
 import audio
 import save
+import entities as entities_mod
 from entities import Player, Boss, Q_COLOR, FloatText
 
 
@@ -900,6 +903,43 @@ async def main():
     screen = None
     is_fullscreen = False
     is_web = (sys.platform == "emscripten")
+
+    def sync_display_constants(new_w, new_h):
+        global WIDTH, HEIGHT
+        new_w = max(960, int(round(new_w / 2) * 2))
+        new_h = max(540, int(round(new_h / 2) * 2))
+        if new_w == WIDTH and new_h == HEIGHT:
+            return
+        WIDTH, HEIGHT = new_w, new_h
+        settings_mod.WIDTH = new_w
+        settings_mod.HEIGHT = new_h
+        level_mod.WIDTH = new_w
+        level_mod.HEIGHT = new_h
+        entities_mod.WIDTH = new_w
+        entities_mod.HEIGHT = new_h
+
+    def configure_web_mobile_view():
+        if not is_web:
+            return
+        try:
+            import platform as _p
+            vv = getattr(_p.window, "visualViewport", None)
+            viewport_w = float(vv.width) if vv else float(_p.window.innerWidth)
+            viewport_h = float(vv.height) if vv else float(_p.window.innerHeight)
+            if viewport_w <= 0 or viewport_h <= 0:
+                return
+            long_edge = max(viewport_w, viewport_h)
+            short_edge = min(viewport_w, viewport_h)
+            aspect = long_edge / max(1.0, short_edge)
+            base_aspect = WIDTH / HEIGHT
+            # 超宽手机横屏时扩展逻辑宽度，减少两侧大黑边。
+            if aspect > base_aspect + 0.08:
+                target_w = min(1360, int(round(HEIGHT * aspect / 2.0) * 2))
+                sync_display_constants(target_w, HEIGHT)
+        except Exception:
+            return
+
+    configure_web_mobile_view()
 
     def apply_display(full):
         nonlocal screen, is_fullscreen
