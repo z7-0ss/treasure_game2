@@ -670,12 +670,16 @@ console.warn("TODO: user defined canvas")
 
 */
 
+    function is_mobile_runtime() {
+        return typeof mobile === "function" && mobile()
+    }
+
     function viewport_size(sticky) {
         const vv = window.visualViewport
         let width = Math.round((vv && vv.width) || window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0)
         let height = Math.round((vv && vv.height) || window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0)
 
-        if (!nuadm || !sticky) {
+        if (!is_mobile_runtime() || !sticky) {
             return { width, height }
         }
 
@@ -692,7 +696,7 @@ console.warn("TODO: user defined canvas")
     }
 
     function preferred_gui_divider(divider) {
-        if (nuadm) {
+        if (is_mobile_runtime()) {
             return 1
         }
         return divider || vm.config.gui_divider || 1
@@ -730,7 +734,7 @@ console.warn("TODO: user defined canvas")
         if (window.devicePixelRatio != 1 )
             console.warn("Unsupported device pixel ratio", window.devicePixelRatio)
 
-        if (vm.config.debug && !nuadm) {
+        if (vm.config.debug && !is_mobile_runtime()) {
             divider = vm.config.gui_debug
         } else {
             divider = preferred_gui_divider(divider)
